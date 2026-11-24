@@ -235,6 +235,68 @@ def _not_buried(path, p, s, e):
     return keep
 
 
+VOICING_GAP = 12      # velocity: a projected tune note is this much over the notes around it
+VOICING_SPAN = 1.5    # s, each side: "around it"
+VOICING_MIN = 20      # projected notes needed (and at least VOICING_SHARE of all notes)
+VOICING_SHARE = 0.08
+VOICING_TOP = 0.75    # share of projected notes that must be the highest struck at their moment
+VOICING_COVER = 0.3   # share of the piece the projected line must cover
+
+
+def projected_line(notes: list[Note]) -> list[Note] | None:
+    """The tune as the pianist voiced it, or None if they didn't voice one.
+
+    Real pianists play the tune clearly louder than the accompaniment (e.g.
+    velocity 85-90 over chords at 45-70). When enough notes stand that far
+    above the notes around them, are nearly always the highest note struck at
+    their moment, and together cover a good part of the piece, they are the
+    tune: each is held until the next. Stretches without such notes (a
+    chords-only intro) become rests. Evenly played music returns None, and
+    top_voice is used instead.
+    """
+    ns = sorted(notes, key=lambda n: n.start)
+    if len(ns) < VOICING_MIN:
+        return None
+    s = np.array([n.start for n in ns])
+    v = np.array([n.velocity for n in ns], dtype=float)
+    p = np.array([n.pitch for n in ns])
+    loud = []
+    for i in range(len(ns)):
+        lo = np.searchsorted(s, s[i] - VOICING_SPAN)
+        hi = np.searchsorted(s, s[i] + VOICING_SPAN)
+        others = np.r_[v[lo:i], v[i + 1:hi]]
+        if len(others) >= 3 and v[i] >= np.median(others) + VOICING_GAP:
+            loud.append(i)
+    if len(loud) < max(VOICING_MIN, VOICING_SHARE * len(ns)):
+        return None
+    top = 0
+    for i in loud:
+        lo = np.searchsorted(s, s[i] - SAME_ONSET)
+        hi = np.searchsorted(s, s[i] + SAME_ONSET)
+        top += p[i] >= p[lo:hi].max()
+    if top / len(loud) < VOICING_TOP:
+        return None
+    line: list[Note] = []
+    for i in loud:
+        n = ns[i]
+        if line and n.start - line[-1].start < SAME_ONSET:
+            if n.pitch > line[-1].pitch:
+                line[-1] = Note(n.pitch, n.start, n.end, n.velocity)
+            continue
+        line.append(Note(n.pitch, n.start, n.end, n.velocity))
+    for a, b in zip(line, line[1:]):
+        a.end = min(a.end, b.start)
+    span = max(ns[-1].end - ns[0].start, 1e-6)
+    if sum(n.end - n.start for n in line) / span < VOICING_COVER:
+        return None
+    return line
+
+
+def piano_melody(notes: list[Note]) -> list[Note]:
+    """The tune of a piano part: the pianist's voicing if clear, else top_voice."""
+    return projected_line(notes) or top_voice(notes)
+
+
 def clean_monophonic(notes: list[Note]) -> list[Note]:
     """Tidy a single-voice line (returns new Note objects).
 

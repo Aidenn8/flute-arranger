@@ -56,7 +56,7 @@ def analyze(song_dir: Path, kind: str = "auto", progress: ProgressFn = _noop) ->
 def _analyze_midi(src: Path, song_id: str) -> Analysis:
     import pretty_midi
     from .beats import grid_from_midi
-    from .melody import top_voice
+    from .melody import top_voice, piano_melody
 
     pm = pretty_midi.PrettyMIDI(str(src))
     insts = [i for i in pm.instruments if not i.is_drum and i.notes]
@@ -73,7 +73,7 @@ def _analyze_midi(src: Path, song_id: str) -> Analysis:
         best = max(candidates, key=lambda i: sum(n.pitch for n in i.notes) / len(i.notes))
         melody = top_voice(to_notes(best))
     else:
-        melody = top_voice(all_notes)
+        melody = piano_melody(all_notes)
     return Analysis(song_id=song_id, kind="midi", duration=pm.get_end_time(),
                     grid=grid_from_midi(pm),
                     sources={"midi_melody": melody, "midi_all": all_notes})
@@ -160,8 +160,12 @@ def _coverage(notes: list[Note]) -> float:
 
 
 def _as_melody(name: str, notes: list[Note]) -> list[Note]:
-    from .melody import top_voice, clean_monophonic
-    return clean_monophonic(notes) if name == "vocals" else top_voice(notes)
+    from .melody import top_voice, clean_monophonic, piano_melody
+    if name == "vocals":
+        return clean_monophonic(notes)
+    if name in ("piano", "midi_all"):
+        return piano_melody(notes)
+    return top_voice(notes)
 
 
 def pick_melody(an: Analysis, source: str) -> tuple[list[Note], str, list[str]]:
@@ -193,7 +197,7 @@ def pick_melody(an: Analysis, source: str) -> tuple[list[Note], str, list[str]]:
     order = ("other", "piano", "midi_all") if an.kind == "ensemble" else ("piano", "other", "midi_all")
     for name in order:
         if s.get(name):
-            return top_voice(s[name]), name, warnings
+            return _as_melody(name, s[name]), name, warnings
     return [], "", warnings + ["No notes were found in this file."]
 
 

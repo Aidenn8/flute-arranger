@@ -1,7 +1,7 @@
 import random
 import time
 
-from sheetswap.melody import clean_monophonic, top_voice
+from sheetswap.melody import clean_monophonic, piano_melody, projected_line, top_voice
 from sheetswap.model import Note
 
 
@@ -161,3 +161,32 @@ def test_clean_monophonic_keeps_louder_at_overlap():
     assert _rows(out) == [(60, 0.0, 0.5), (64, 0.5, 1.2)]
     out = clean_monophonic([Note(60, 0.0, 1.0, 90), Note(64, 0.5, 1.2, 50)])
     assert _rows(out) == [(60, 0.0, 1.0), (64, 1.0, 1.2)]
+
+
+def _gymnopedie_like(tune_vel):
+    """4 bars of soft bass + chords alone, then a tune over them (3/4, 0.8 s beats)."""
+    notes, tune = [], [78, 81, 79, 78, 73, 71, 73, 74, 69, 66, 78, 81, 79, 78, 73, 71] * 2
+    for bar in range(20):
+        t = bar * 2.4
+        notes.append(Note(43 if bar % 2 == 0 else 38, t, t + 2.3, 55))
+        for p in ((66, 62, 59) if bar % 2 == 0 else (66, 61, 57)):
+            notes.append(Note(p, t + 0.8, t + 2.3, 52))
+        if bar >= 4:
+            for k in range(2):
+                notes.append(Note(tune[(bar - 4) * 2 + k], t + k * 1.2, t + k * 1.2 + 1.5, tune_vel))
+    return notes, tune
+
+
+def test_projected_line_follows_voiced_tune_and_rests_in_intro():
+    notes, tune = _gymnopedie_like(tune_vel=88)
+    line = projected_line(notes)
+    assert line is not None
+    assert [n.pitch for n in line] == tune
+    assert line[0].start >= 4 * 2.4 - 0.01          # nothing during the chords-only intro
+    assert all(a.end <= b.start for a, b in zip(line, line[1:]))
+
+
+def test_projected_line_none_when_evenly_played():
+    notes, _ = _gymnopedie_like(tune_vel=55)
+    assert projected_line(notes) is None
+    assert piano_melody(notes) == top_voice(notes)
