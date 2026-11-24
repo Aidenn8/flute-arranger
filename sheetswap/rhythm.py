@@ -15,6 +15,9 @@ SIXTEENTH = 3
 TRIPLET = 4
 EIGHTH = 6
 TRIPLET_GAIN = 0.4   # triplets must cut a beat's snapping error by more than this
+EIGHTH_TOL = 1.25    # ticks: a beat is written in 8ths if every onset is this close to one
+LEGATO_GAP = TICKS_PER_BEAT  # gaps shorter than a beat are held through (a flute line is
+                             # legato; a pianist's lifted fingers are not rests)
 
 
 def snap(ticks: float, step: int) -> int:
@@ -27,12 +30,21 @@ def _beat_of(ticks: float) -> int:
 
 
 def _beat_steps(starts: list[float]) -> dict[int, int]:
-    """Beats whose onsets fit the 8th-triplet grid clearly better than 16ths."""
+    """The coarsest grid each beat's onsets fit: 8ths, else 8th triplets, else 16ths.
+
+    Real playing (rubato, a late finger) lands between grid lines; always
+    snapping to 16ths turns that into fussy dotted-16th rhythms, so a beat
+    only gets 16ths when its notes really are that fast.
+    """
     by_beat: dict[int, list[float]] = {}
     for s in starts:
         by_beat.setdefault(_beat_of(s), []).append(s)
     steps = {}
     for beat, ss in by_beat.items():
+        on8 = [snap(s, EIGHTH) for s in ss]
+        if max(abs(s - q) for s, q in zip(ss, on8)) <= EIGHTH_TOL and len(set(on8)) == len(on8):
+            steps[beat] = EIGHTH
+            continue
         if len(ss) < 2:
             continue
         err16 = sum(abs(s - snap(s, SIXTEENTH)) for s in ss)
@@ -77,8 +89,8 @@ def quantize_line(notes: list[Note], grid: BeatGrid, simple: bool = False) -> li
     for i, st in enumerate(starts):
         e, n = kept[st]
         nxt = starts[i + 1] if i + 1 < len(starts) else None
-        if nxt is not None and nxt - e < min_dur:
-            en = nxt                       # tiny gap (or overlap): hold to the next note
+        if nxt is not None and nxt - e < max(min_dur, LEGATO_GAP):
+            en = nxt                       # short gap (or overlap): hold to the next note
         else:
             en = max(snap(e, step_at(e)), st + min_dur)
             if nxt is not None and nxt - en < min_dur:

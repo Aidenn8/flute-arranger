@@ -102,15 +102,26 @@ def test_collision_keeps_louder():
     assert q[0].velocity == 100
 
 
-def test_short_gap_extends_and_rests_kept():
+def test_short_gaps_held_long_rests_kept():
     g = _steady(0.5)
     notes = [
-        Note(70, 0.0, 0.42),   # ends 1.9 ticks before the next onset -> extended to it
-        Note(72, 0.5, 0.75),   # ends 6 ticks before the next onset -> 8th rest kept
-        Note(74, 1.0, 1.5),
+        Note(70, 0.0, 0.42),   # ends 1.9 ticks before the next onset -> held to it
+        Note(72, 0.5, 0.75),   # ends 6 ticks (an 8th) before the next onset -> held (legato)
+        Note(74, 1.0, 1.4),    # ends 14.4 ticks before the next onset -> a rest of a beat stays
+        Note(76, 2.5, 3.0),
     ]
     q = quantize_line(notes, g)
-    assert [(n.start, n.dur) for n in q] == [(0, 12), (12, 6), (24, 12)]
+    assert [(n.start, n.dur) for n in q] == [(0, 12), (12, 12), (24, 12), (60, 12)]
+
+
+def test_rubato_eighths_written_as_eighths():
+    g = _steady(0.5)
+    # eighth notes played unevenly (up to 0.1 beat early/late) stay plain 8ths
+    offs = [0.0, 0.08, -0.09, 0.1, 0.0, -0.06, 0.07, 0.0]
+    notes = [Note(72 + i, (i * 0.5 + o) * 0.5, (i * 0.5 + o) * 0.5 + 0.2) for i, o in enumerate(offs)]
+    q = quantize_line(notes, g)
+    assert [n.start for n in q] == [0, 6, 12, 18, 24, 30, 36, 42]
+    assert all(n.dur == 6 for n in q[:-1])
 
 
 def test_pickup_notes_get_negative_ticks():
