@@ -1,0 +1,15 @@
+torch
+torchaudio
+librosa
+soundfile
+music21
+verovio
+pretty_midi
+mir_eval
+flask
+numpy
+scipy
+piano_transcription_inference
+demucs
+basic-pitch[onnx]
+pytest
