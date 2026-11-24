@@ -225,6 +225,22 @@ def _accompaniment_pool(an: Analysis, melody_src: str,
     return pool, s.get("bass") or None
 
 
+def rescale_tempo(grid: BeatGrid, tempo: int) -> BeatGrid:
+    """Half (-1) or double (+1) the beat rate; the first downbeat stays where it is.
+
+    Beat trackers often lock onto twice (or half) the felt tempo, which writes
+    the same music in note values half (or twice) as long as they should be.
+    """
+    b = list(grid.beats)
+    if tempo < 0 and len(b) >= 4:
+        off = grid.first_downbeat % 2
+        return BeatGrid(b[off::2], grid.beats_per_bar, (grid.first_downbeat - off) // 2)
+    if tempo > 0 and len(b) >= 2:
+        doubled = [t for a, c in zip(b, b[1:]) for t in (a, (a + c) / 2)] + [b[-1]]
+        return BeatGrid(doubled, grid.beats_per_bar, grid.first_downbeat * 2)
+    return grid
+
+
 def arrange(an: Analysis, opts: ArrangeOptions) -> Arrangement:
     from .rhythm import quantize_line, add_breath_marks
     from .flute import fit_to_flute, easy_key_shift, key_after_shift
@@ -233,7 +249,7 @@ def arrange(an: Analysis, opts: ArrangeOptions) -> Arrangement:
     from .checks import check_arrangement
 
     melody, used, warnings = pick_melody(an, opts.melody_source)
-    grid = an.grid
+    grid = rescale_tempo(an.grid, opts.tempo)
     bpb = opts.meter if opts.meter in (3, 4) else grid.beats_per_bar
     if bpb != grid.beats_per_bar or opts.barshift:
         first = grid.first_downbeat + opts.barshift % bpb

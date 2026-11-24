@@ -144,12 +144,13 @@ class ArrangeOptions:
     piano_style: str = "chords"
     meter: int = 0                # 0 = as detected, else beats per bar (3 or 4)
     barshift: int = 0             # move the bar lines this many beats later (0-3)
+    tempo: int = 0                # -1 = half as fast (beats twice as long), +1 = twice as fast
 
     def key(self) -> str:
         return (f"{self.mode}-{self.melody_source}-o{self.octave:+d}-"
                 f"{'simple' if self.simple else 'full'}-"
                 f"{'easy' if self.easy_key else 'orig'}-{self.piano_style}-m{self.meter}"
-                f"-b{self.barshift}")
+                f"-b{self.barshift}-t{self.tempo:+d}")
 
     @classmethod
     def from_form(cls, d: Mapping) -> "ArrangeOptions":
@@ -172,6 +173,10 @@ class ArrangeOptions:
             opts.barshift = b if 0 <= b <= 3 else 0
         except (TypeError, ValueError):
             opts.barshift = 0
+        try:
+            opts.tempo = max(-1, min(1, int(d.get("tempo", 0))))
+        except (TypeError, ValueError):
+            opts.tempo = 0
         truthy = ("1", "on", "true", "yes", True)
         opts.simple = d.get("simple") in truthy
         opts.easy_key = d.get("easy_key") in truthy

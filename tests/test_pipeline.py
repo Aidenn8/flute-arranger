@@ -96,6 +96,23 @@ def _analysis(sources, duration=8.0):
     return Analysis("x", "song", duration, BeatGrid([i * 0.5 for i in range(20)], 4, 0), sources)
 
 
+def test_rescale_tempo_half_and_double():
+    g = BeatGrid([i * 0.25 for i in range(16)], 4, 2)        # 240 BPM, downbeat at 0.5 s
+    half = pipeline.rescale_tempo(g, -1)
+    assert abs(half.bpm() - 120) < 1e-6 and half.to_seconds(0) == 0.5
+    double = pipeline.rescale_tempo(BeatGrid([i * 0.5 for i in range(8)], 4, 1), 1)
+    assert abs(double.bpm() - 240) < 1e-6 and double.to_seconds(0) == 0.5
+    assert pipeline.rescale_tempo(g, 0) is g
+
+
+def test_half_tempo_doubles_note_values(tmp_path):
+    an = pipeline.analyze(_song(tmp_path))
+    base = pipeline.arrange(an, ArrangeOptions())
+    half = pipeline.arrange(an, ArrangeOptions(tempo=-1))
+    assert [q.dur for q in half.flute][:4] == [q.dur // 2 for q in base.flute][:4]
+    assert half.bpm == base.bpm // 2
+
+
 def test_bar_shift_keeps_pickup_under_a_bar():
     # music starts 3 beats before the first downbeat (a 3-beat pickup in 4/4)
     grid = BeatGrid([i * 0.5 for i in range(40)], 4, 3)

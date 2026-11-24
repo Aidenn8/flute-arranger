@@ -8,6 +8,7 @@ Flute F1: the final flute part, same comparison. Check failures: playability che
 | A | 12 | 0.90 | 0.90 | 0.66 | 0 |
 | B | 12 | 0.61 | 0.67 | 0.50 | 0 |
 | C | 3 | 0.95 | 0.95 | 0.92 | 0 |
+| D | 12 | 0.94 | 0.96 | 0.86 | 0 |
 
 | set | piece | kind | tune from | melody F1 | flute F1 | meter | tempo |
 |---|---|---|---|---|---|---|---|
@@ -38,3 +39,15 @@ Flute F1: the final flute part, same comparison. Check failures: playability che
 | C | bwv104_6_arp | piano | piano | 0.98 | 0.98 | 4/4 | 78 |
 | C | bwv108_6_arp | piano | piano | 0.96 | 0.96 | 4/4 | 144 |
 | C | bwv113_8_arp | piano | piano | 0.92 | 0.92 | 4/4 | 96 |
+| D | bwv66_6 | song | vocals | 1.00 | 1.00 | 4/4 | 154 |
+| D | bwv269 | song | vocals | 1.00 | 1.00 | 4/4 | 98 |
+| D | bwv347 | song | vocals | 0.95 | 0.97 | 4/4 | 89 |
+| D | bwv153_1 | song | vocals | 0.92 | 0.92 | 4/4 | 160 |
+| D | bwv86_6 | song | vocals | 0.99 | 0.99 | 4/4 | 93 |
+| D | bwv267 | song | vocals | 0.89 | 0.94 | 4/4 | 84 |
+| D | bwv40_8 | song | vocals | 0.94 | 0.95 | 4/4 | 86 |
+| D | bwv244_37 | song | vocals | 0.96 | 0.96 | 4/4 | 147 |
+| D | bwv26_6 | song | vocals | 0.86 | 0.86 | 4/4 | 164 |
+| D | bwv64_2 | song | vocals | 0.97 | 0.97 | 4/4 | 93 |
+| D | bwv2_6 | song | vocals | 0.92 | 0.97 | 4/4 | 92 |
+| D | bwv101_7 | song | vocals | 0.92 | 0.92 | 4/4 | 160 |

@@ -44,6 +44,11 @@
   <td>{{ radios("octave", opts.octave, [("-1", "lower"), ("0", "as chosen"), ("1", "higher")]) }}</td>
 </tr>
 <tr>
+  <td valign="top">Beat:</td>
+  <td>{{ radios("tempo", opts.tempo, [("0", "as heard"), ("-1", "half as fast"), ("1", "twice as fast")]) }}<br>
+  <small>Notes look too short (lots of 16ths in a calm song)? Try twice as fast. Too long (half and whole notes in a lively song)? Try half as fast.</small></td>
+</tr>
+<tr>
   <td valign="top">Time:</td>
   <td>{{ radios("meter", opts.meter, [("0", "as heard"), ("4", "4/4"), ("3", "3/4")]) }}<br>
   <small>If the bars feel too long or too short, try the other one.</small></td>

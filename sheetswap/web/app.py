@@ -274,7 +274,7 @@ def key_name(fifths: int, mode: str) -> str:
 def _query(opts: ArrangeOptions) -> dict:
     q = {"mode": opts.mode, "melody_source": opts.melody_source,
          "octave": opts.octave, "piano_style": opts.piano_style, "meter": opts.meter,
-         "barshift": opts.barshift}
+         "barshift": opts.barshift, "tempo": opts.tempo}
     if opts.simple:
         q["simple"] = "1"
     if opts.easy_key:

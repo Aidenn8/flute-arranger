@@ -26,6 +26,7 @@ Command line, if you'd rather:
 | **Make** | flute only, or flute + piano (the piano stays under the flute and never covers it) |
 | **Which part is the tune?** | let it guess, the singing, the piano's top line, or another instrument |
 | **Octave** | move the flute part an octave lower or higher (always kept between C4 and C7) |
+| **Beat** | twice as fast if the notes look too short (lots of 16ths in a calm song), half as fast if they look too long |
 | **Time** | 4/4 or 3/4, if the bars feel too long or too short |
 | **Bar lines** | move the bar lines 1–3 beats later if the strong beats don't land at the start of each bar |
 | **Make it easier to play** | no notes faster than 8ths |
@@ -42,15 +43,18 @@ Measured on test music whose real melody is known (`bench/results.md`):
 |---|---|
 | Solo piano | 90% |
 | Piano with broken-chord accompaniment | 95% |
+| Singing (with vibrato) over piano and drums | 96% |
 | Piano plus a solo instrument (clarinet, violin) | 67% |
 
 On real recordings:
-- **Piano pieces played with a clear melody** (Satie's Gymnopédie No. 1, Chopin's Nocturne Op. 9 No. 2) come out right: it follows the notes the pianist plays louder.
+- **Piano pieces played with a clear melody** (Satie's Gymnopédie No. 1, Chopin's Nocturne Op. 9 No. 2) come out right: it follows the notes the pianist plays louder, and stays quiet through a chords-only intro.
+- **Songs with singing** (tested on a soprano and a male singer with a band): the notes of the tune come out right, one note per sung syllable. Singers stretch the rhythm a lot, so turn on **Make it easier to play**: the anthem then reads in plain quarters, halves and 8ths.
 - **Very free tempo** (e.g. Für Elise played with lots of rubato) gets the right notes but a busier rhythm than the printed music.
-- **Bar lines**: the beat and the meter are usually right; where the bar starts is the weakest part, so use the *Time* and *Bar lines* options when the score reads oddly.
-- **Songs with singing**: the singing is separated from the band first; the tune is usually there, but a voice with a lot of vibrato can come out busier than it should.
+- **Beat and bars**: the meter is usually right; with drums the beat is sometimes twice the real tempo, and where the bar starts is the weakest part. Use *Beat*, *Time* and *Bar lines* when the score reads oddly.
 
 It works best on recordings where the tune is clear: one main instrument or voice carrying it, not too much reverb.
+
+Known limits: MIDI files in 6/8, 2/4 or 12/8 are written in 4/4 (only 3/4 and 4/4 are supported); notes faster than about 1/7 s in a sung line are merged into their neighbours; a male voice that sits between two pitches can land a semitone off.
 
 ## Setting it up from scratch
 
