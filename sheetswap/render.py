@@ -90,6 +90,10 @@ def render_svg(musicxml: Path) -> list[str]:
 
     verovio.enableLog(verovio.LOG_OFF)
     tk = verovio.toolkit()
+    # Verovio finds its fonts only on the first thread that used it; on any
+    # other thread (the web server's request threads) its default resource
+    # path points at a build folder that doesn't exist, so set it every time.
+    tk.setResourcePath(str(Path(verovio.__file__).resolve().parent / "data"))
     tk.setOptions(VEROVIO_OPTIONS)
     if not tk.loadFile(str(musicxml)):
         raise ValueError(f"Verovio could not read {musicxml}")

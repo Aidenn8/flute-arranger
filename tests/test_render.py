@@ -30,6 +30,20 @@ def test_render_svg_solo(tmp_path):
     assert pages and pages[0].count('class="staff"') >= 1
 
 
+def test_render_svg_works_on_other_threads(tmp_path):
+    # the web server renders on request threads; Verovio's default resource
+    # path is only right on the first thread that used it
+    import threading
+    path = write_outputs(duet(), "Threads", tmp_path)["musicxml"]
+    render_svg(path)                                  # first use, this thread
+    results = []
+    for _ in range(2):
+        t = threading.Thread(target=lambda: results.append(len(render_svg(path))))
+        t.start()
+        t.join()
+    assert results == [1, 1]
+
+
 def test_breath_at_bar_end_moves_before_barline(tmp_path):
     from sheetswap.render import _bar_end_breaths
     flute = [QNote(72, 0, 24), QNote(74, 24, 24, breath_after=True),      # bar 1: ends the bar
