@@ -34,7 +34,8 @@ from flask import (Flask, abort, redirect, render_template, request,
 from .. import config
 from ..model import ArrangeOptions
 
-UPLOAD_TYPES = ("mp3", "wav", "m4a", "aac", "flac", "ogg", "mid", "midi")
+UPLOAD_TYPES = ("mp3", "wav", "m4a", "aac", "flac", "ogg", "oga", "opus", "webm", "aiff", "aif",
+                "mid", "midi")
 MIDI_TYPES = ("mid", "midi")
 MAX_UPLOAD_MB = 200
 KINDS = ("auto", "piano", "ensemble", "song", "band")

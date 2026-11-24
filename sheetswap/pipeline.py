@@ -9,7 +9,7 @@ from typing import Callable
 from .model import Analysis, ArrangeOptions, Arrangement, BeatGrid, Note, QNote
 
 ProgressFn = Callable[[int, int, str], None]
-AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
+AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus", ".webm", ".aiff", ".aif"}
 MIDI_EXTS = {".mid", ".midi"}
 
 
