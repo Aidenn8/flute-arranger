@@ -122,7 +122,8 @@ def _analyze_audio(src: Path, song_dir: Path, kind: str, progress: ProgressFn) -
 
     progress(4, total, "Finding the beat")
     drums = stems.get("drums") if kind in ("song", "band") else None
-    grid = track_beats(mono, drums)
+    beat_notes = sources.get("piano") or (sources.get("other", []) + sources.get("bass", []))
+    grid = track_beats(mono, drums, beat_notes)
 
     progress(5, total, "Saving")
     return Analysis(song_id=song_dir.name, kind=kind, duration=duration, grid=grid, sources=sources)
@@ -226,8 +227,9 @@ def arrange(an: Analysis, opts: ArrangeOptions) -> Arrangement:
 
     melody, used, warnings = pick_melody(an, opts.melody_source)
     grid = an.grid
-    if opts.meter in (3, 4) and opts.meter != grid.beats_per_bar:
-        grid = BeatGrid(grid.beats, opts.meter, grid.first_downbeat)
+    bpb = opts.meter if opts.meter in (3, 4) else grid.beats_per_bar
+    if bpb != grid.beats_per_bar or opts.barshift:
+        grid = BeatGrid(grid.beats, bpb, grid.first_downbeat + opts.barshift % bpb)
     line = quantize_line(melody, grid, simple=opts.simple)
 
     everything = [n for notes in an.sources.values() for n in notes]

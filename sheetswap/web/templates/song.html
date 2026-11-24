@@ -46,7 +46,12 @@
 <tr>
   <td valign="top">Time:</td>
   <td>{{ radios("meter", opts.meter, [("0", "as heard"), ("4", "4/4"), ("3", "3/4")]) }}<br>
-  <small>If the bar lines look wrong, try the other one.</small></td>
+  <small>If the bars feel too long or too short, try the other one.</small></td>
+</tr>
+<tr>
+  <td valign="top">Bar lines:</td>
+  <td>{{ radios("barshift", opts.barshift, [("0", "as heard"), ("1", "1 beat later"), ("2", "2 beats later"), ("3", "3 beats later")]) }}<br>
+  <small>If the strong beats don't land at the start of each bar, move the bar lines.</small></td>
 </tr>
 <tr>
   <td valign="top">Easier:</td>

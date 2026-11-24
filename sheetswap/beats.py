@@ -20,10 +20,40 @@ DEFAULT_BPM = 120.0
 THREE_MARGIN = 1.1        # 3/4 must beat 4/4 by 10% (ties go to 4/4)
 SILENCE = 0.01            # RMS below 1% of the peak (-40 dB) counts as silence
 DRUMS_MIN = 0.1           # drums stem quieter than this share of the mix RMS is ignored
+NOTE_BLEND = 0.7          # weight of the notes' onset curve vs the audio's, for beat tracking
+BASS_WEIGHT = 1.5         # extra weight of low notes in the curve used to find the downbeats
 
 
-def track_beats(wav: Path, drums_wav: Path | None = None) -> BeatGrid:
-    """Beat grid of an audio file; tracks on the drums stem when it has real drums."""
+def notes_envelope(notes, n_frames: int, bass_weight: float = 0.0) -> np.ndarray:
+    """An onset-strength curve built from transcribed notes (one spike per onset).
+
+    Each onset adds its loudness (and, with bass_weight, more for low notes,
+    which mark downbeats and chord changes), spread over a couple of frames.
+    Much cleaner than the audio's own onset curve for piano with pedal.
+    """
+    env = np.zeros(n_frames)
+    for n in notes:
+        f = int(round(n.start * SR / HOP))
+        if 0 <= f < n_frames:
+            w = (n.velocity / 127) * (1 + bass_weight * max(0.0, (72 - n.pitch) / 24))
+            if bass_weight:
+                w *= min(max(n.end - n.start, 0.05), 2.0)   # long notes start on strong beats
+            env[f] += w
+    kernel = np.array([0.25, 1.0, 0.5, 0.25])
+    return np.convolve(env, kernel, mode="full")[:n_frames]
+
+
+def _norm(x: np.ndarray) -> np.ndarray:
+    peak = float(np.percentile(x, 99)) if x.size else 0.0
+    return x / peak if peak > 0 else x
+
+
+def track_beats(wav: Path, drums_wav: Path | None = None, notes=None) -> BeatGrid:
+    """Beat grid of an audio file.
+
+    Tracks on the drums stem when it has real drums; otherwise, when the
+    transcribed notes are given, on their onsets blended with the audio's.
+    """
     import librosa
 
     y, _ = librosa.load(str(wav), sr=SR, mono=True)
@@ -33,10 +63,15 @@ def track_beats(wav: Path, drums_wav: Path | None = None) -> BeatGrid:
 
     env = librosa.onset.onset_strength(y=y, sr=SR, hop_length=HOP)
     track_env = env
+    drums = False
     if drums_wav is not None:
         d, _ = librosa.load(str(drums_wav), sr=SR, mono=True)
         if len(d) >= 4 * HOP and _rms(d) >= DRUMS_MIN * _rms(y):
             track_env = librosa.onset.onset_strength(y=d, sr=SR, hop_length=HOP)
+            drums = True
+    if notes and not drums:
+        track_env = NOTE_BLEND * _norm(notes_envelope(notes, len(env))) + (1 - NOTE_BLEND) * _norm(env)
+        env = _norm(notes_envelope(notes, len(env), bass_weight=BASS_WEIGHT)) + 0.25 * _norm(env)
 
     start, end = _music_span(y)
     tempo, frames = librosa.beat.beat_track(onset_envelope=track_env, sr=SR, hop_length=HOP)

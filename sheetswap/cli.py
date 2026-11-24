@@ -47,6 +47,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--easy-key", action="store_true")
     ap.add_argument("--piano-style", default="chords", choices=["chords", "cleaned"])
     ap.add_argument("--meter", type=int, default=0, choices=[0, 3, 4], help="beats per bar (0 = as heard)")
+    ap.add_argument("--barshift", type=int, default=0, choices=[0, 1, 2, 3],
+                    help="move the bar lines this many beats later")
     ap.add_argument("--song-dir", type=Path, help="re-use an existing song folder")
     a = ap.parse_args(argv)
     if not a.song_dir and not a.file:
@@ -63,7 +65,7 @@ def main(argv: list[str] | None = None) -> None:
     _set_meta(song_dir, status="done", kind=an.kind)
     opts = ArrangeOptions(mode=a.mode, melody_source=a.melody, octave=a.octave,
                           simple=a.simple, easy_key=a.easy_key, piano_style=a.piano_style,
-                          meter=a.meter)
+                          meter=a.meter, barshift=a.barshift)
     res = pipeline.arrange_and_render(song_dir, opts)
     arr = res["arr"]
     print(f"[{time.time() - t0:6.1f}s] done: kind={an.kind} flute notes={len(arr.flute)} "

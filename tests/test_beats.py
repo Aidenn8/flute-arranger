@@ -79,6 +79,22 @@ def test_meter_three_four(tmp_path):
     _assert_downbeats(g, [t for t, a in zip(times, accents) if a], 3)
 
 
+def test_notes_give_meter_and_downbeat_when_audio_is_even(tmp_path):
+    # even clicks (no accents): the audio alone can't tell 3/4; the notes can:
+    # a long bass note starts every 3rd beat, short melody notes on the others
+    from sheetswap.model import Note
+    times = [1.0 + 0.5 * i for i in range(48)]
+    wav = _clicks(tmp_path / "even.wav", 26.0, times)
+    notes = []
+    for i, t in enumerate(times):
+        if i % 3 == 1:
+            notes.append(Note(43, t, t + 1.45, 80))
+        notes.append(Note(72 + i % 5, t, t + 0.3, 70))
+    g = track_beats(wav, None, notes)
+    assert g.beats_per_bar == 3
+    _assert_downbeats(g, [t for i, t in enumerate(times) if i % 3 == 1], 3)
+
+
 def test_meter_four_four(tmp_path):
     times = [1.25 + 0.5 * i for i in range(48)]
     accents = [i % 4 == 0 for i in range(48)]

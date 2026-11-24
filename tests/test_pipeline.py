@@ -70,6 +70,8 @@ def test_easy_key_and_octave_options(tmp_path):
         assert all(FLUTE_HARD[0] <= q.pitch <= FLUTE_HARD[1] for q in arr.flute)
     three = pipeline.arrange(an, ArrangeOptions(meter=3))
     assert three.beats_per_bar == 3 and base.beats_per_bar == 4
+    shifted = pipeline.arrange(an, ArrangeOptions(barshift=1))
+    assert [q.start for q in shifted.flute] == [q.start - 12 for q in base.flute]
 
 
 def _analysis(sources, duration=8.0):
