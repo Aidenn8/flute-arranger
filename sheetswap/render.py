@@ -21,22 +21,11 @@ VEROVIO_OPTIONS = {
     "breaks": "auto",
     "footer": "none",
 }
-# Mix for MuseScore_General under TinySoundFont. Its grand piano plays the
-# velocity layer from about 76 to 105 some 20 dB too quietly, so piano notes
-# are mapped into the soft layer (30..75); that also suits an accompaniment.
-# The flute is far louder per note, so its channel volume (MIDI CC 7) comes
-# down until it sits a few dB in front of the piano, and the master gain
-# brings the whole mix up.
-_VOLUME = {config.FLUTE_PROGRAM: 86, config.PIANO_PROGRAM: 127}
-_PIANO_VELOCITY = (30, 75)
-GAIN_DB = 16.0
-
-
-def _velocity(program: int, velocity: int) -> int:
-    if program == config.PIANO_PROGRAM:
-        lo, hi = _PIANO_VELOCITY
-        return lo + round(velocity * (hi - lo) / 127)
-    return velocity
+# Mix: with the soundfont patched by sheetswap.synth, a single flute line sits
+# about 7 dB above single piano notes at equal velocity (measured), and piano
+# chords close some of that gap, so the tune leads and the piano supports it.
+# Both channels stay at full MIDI volume (CC 7 in TinySoundFont is steep).
+_VOLUME = {config.FLUTE_PROGRAM: 127, config.PIANO_PROGRAM: 127}
 
 
 def _bar_end_breaths(musicxml: Path) -> dict[str, float]:
@@ -115,16 +104,8 @@ def render_svg(musicxml: Path) -> list[str]:
     return [tk.renderToSVG(page) for page in range(1, tk.getPageCount() + 1)]
 
 
-def _soft_clip(x: np.ndarray, knee: float = 0.8) -> np.ndarray:
-    over = np.abs(x) > knee
-    if over.any():
-        y = np.abs(x[over]) - knee
-        x[over] = np.sign(x[over]) * (knee + (1 - knee) * np.tanh(y / (1 - knee)))
-    return x
-
-
 def render_audio(midi: Path, out_mp3: Path) -> Path | None:
-    """MIDI -> 44.1 kHz stereo (TinySoundFont + SOUNDFONT) -> mp3 128k.
+    """MIDI -> 44.1 kHz stereo (sheetswap.synth + SOUNDFONT) -> mp3 128k.
 
     Returns None when the soundfont, the synth or ffmpeg is missing.
     """
@@ -134,57 +115,29 @@ def render_audio(midi: Path, out_mp3: Path) -> Path | None:
     try:
         import imageio_ffmpeg
         import pretty_midi
-        import tinysoundfont
+        from .synth import synthesize
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     except (ImportError, RuntimeError):
         return None
 
     pm = pretty_midi.PrettyMIDI(str(midi))
-    synth = tinysoundfont.Synth(gain=GAIN_DB, samplerate=RATE)
-    sfid = synth.sfload(str(soundfont))
-    events = []                                   # (time, on?, channel, pitch, velocity)
-    channels = [c for c in range(16) if c != 9]   # channel 10 is drums in General MIDI
-    for chan, inst in zip(channels, (i for i in pm.instruments if not i.is_drum)):
-        synth.program_select(chan, sfid, 0, inst.program)
-        synth.control_change(chan, 7, _VOLUME.get(inst.program, 100))
-        for n in inst.notes:
-            events.append((n.start, 1, chan, n.pitch, _velocity(inst.program, n.velocity)))
-            events.append((n.end, 0, chan, n.pitch, 0))
-    events.sort(key=lambda e: (e[0], e[1]))       # note-offs before note-ons at one time
-    end_time = max((e[0] for e in events), default=0.0) + 1.5   # let the last note ring
+    for inst in pm.instruments:
+        vol = _VOLUME.get(inst.program, 100)
+        inst.control_changes.insert(0, pretty_midi.ControlChange(7, vol, 0.0))
+    audio = synthesize(pm, soundfont, RATE)
+    peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+    if peak > 0:
+        audio = audio * (0.89 / peak)
 
     out_mp3 = Path(out_mp3)
     out_mp3.parent.mkdir(parents=True, exist_ok=True)
     cmd = [ffmpeg, "-y", "-loglevel", "error", "-f", "f32le", "-ar", str(RATE), "-ac", "2",
            "-i", "pipe:0", "-codec:a", "libmp3lame", "-b:a", "128k", str(out_mp3)]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    def emit(frames: int) -> None:
-        while frames > 0:
-            n = min(frames, RATE)
-            block = np.frombuffer(synth.generate_simple(n), dtype=np.float32).copy()
-            proc.stdin.write(_soft_clip(block).tobytes())
-            frames -= n
-
-    try:
-        done = 0
-        for t, on, chan, key, vel in events:
-            at = int(round(t * RATE))
-            if at > done:
-                emit(at - done)
-                done = at
-            if on:
-                synth.noteon(chan, key, vel)
-            else:
-                synth.noteoff(chan, key)
-        emit(int(round(end_time * RATE)) - done)
-        proc.stdin.close()
-    except BrokenPipeError:
-        pass
-    err = proc.stderr.read().decode(errors="replace")
-    if proc.wait() != 0 or not out_mp3.exists():
+    proc = subprocess.run(cmd, input=audio.astype(np.float32).tobytes(), capture_output=True)
+    if proc.returncode != 0 or not out_mp3.exists():
         # the preview is optional: the score still shows without it
-        log.warning("ffmpeg could not write %s: %s", out_mp3, err.strip()[-300:])
+        log.warning("ffmpeg could not write %s: %s", out_mp3,
+                    proc.stderr.decode(errors="replace").strip()[-300:])
         out_mp3.unlink(missing_ok=True)
         return None
     return out_mp3
