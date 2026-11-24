@@ -68,6 +68,8 @@ def test_easy_key_and_octave_options(tmp_path):
     assert {q.pitch for q in up.flute} != {q.pitch for q in lo.flute}
     for arr in (up, lo):
         assert all(FLUTE_HARD[0] <= q.pitch <= FLUTE_HARD[1] for q in arr.flute)
+    three = pipeline.arrange(an, ArrangeOptions(meter=3))
+    assert three.beats_per_bar == 3 and base.beats_per_bar == 4
 
 
 def _analysis(sources, duration=8.0):
@@ -86,6 +88,25 @@ def test_pick_melody_missing_source_warns():
     other = [Note(72, i * 0.5, i * 0.5 + 0.45) for i in range(8)]
     _, used, warn = pipeline.pick_melody(_analysis({"other": other}), "vocals")
     assert used == "other" and warn
+
+
+def test_unexplained_share():
+    piano = [Note(60, 0.0, 0.5), Note(64, 0.5, 1.0)]
+    general = [Note(60, 0.02, 0.5), Note(64, 0.55, 1.0), Note(76, 0.0, 1.0), Note(77, 1.0, 2.0)]
+    assert pipeline.unexplained_share(general, piano) == 0.5
+    assert pipeline.unexplained_share([], piano) == 0.0
+
+
+def test_ensemble_takes_tune_from_other_instrument():
+    piano = [Note(48 + (i % 3) * 4, i * 0.5, i * 0.5 + 0.45) for i in range(14)]
+    other = [Note(79, i * 0.5, i * 0.5 + 0.45) for i in range(14)]
+    an = _analysis({"piano": piano, "other": other})
+    an.kind = "ensemble"
+    _, used, _ = pipeline.pick_melody(an, "auto")
+    assert used == "other"
+    an.kind = "piano"
+    _, used, _ = pipeline.pick_melody(an, "auto")
+    assert used == "piano"
 
 
 def test_empty_midi_raises(tmp_path):

@@ -36,5 +36,8 @@ def test_options_from_form_defaults():
     assert (o2.mode, o2.octave, o2.simple) == ("duet", 1, True)
     keys = {ArrangeOptions().key(), o2.key(),
             ArrangeOptions(easy_key=True).key(), ArrangeOptions(piano_style="cleaned").key(),
-            ArrangeOptions(melody_source="vocals").key(), ArrangeOptions(octave=-1).key()}
-    assert len(keys) == 6
+            ArrangeOptions(melody_source="vocals").key(), ArrangeOptions(octave=-1).key(),
+            ArrangeOptions(meter=3).key()}
+    assert len(keys) == 7
+    assert ArrangeOptions.from_form({"meter": "3"}).meter == 3
+    assert ArrangeOptions.from_form({"meter": "7"}).meter == 0

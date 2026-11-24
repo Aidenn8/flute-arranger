@@ -44,6 +44,11 @@
   <td>{{ radios("octave", opts.octave, [("-1", "lower"), ("0", "as chosen"), ("1", "higher")]) }}</td>
 </tr>
 <tr>
+  <td valign="top">Time:</td>
+  <td>{{ radios("meter", opts.meter, [("0", "as heard"), ("4", "4/4"), ("3", "3/4")]) }}<br>
+  <small>If the bar lines look wrong, try the other one.</small></td>
+</tr>
+<tr>
   <td valign="top">Easier:</td>
   <td><label><input type="checkbox" name="simple" value="1"{% if opts.simple %} checked{% endif %}> Make it easier to play (fewer fast notes)</label><br>
   <label><input type="checkbox" name="easy_key" value="1"{% if opts.easy_key %} checked{% endif %}> Move to an easier key</label></td>

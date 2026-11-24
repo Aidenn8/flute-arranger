@@ -37,7 +37,7 @@ from ..model import ArrangeOptions
 UPLOAD_TYPES = ("mp3", "wav", "m4a", "aac", "flac", "ogg", "mid", "midi")
 MIDI_TYPES = ("mid", "midi")
 MAX_UPLOAD_MB = 200
-KINDS = ("auto", "piano", "song", "band")
+KINDS = ("auto", "piano", "ensemble", "song", "band")
 MODES = ("solo", "duet")
 BUSY = ("queued", "analyzing")
 LOG_TAIL = 20
@@ -263,7 +263,7 @@ def key_name(fifths: int, mode: str) -> str:
 
 def _query(opts: ArrangeOptions) -> dict:
     q = {"mode": opts.mode, "melody_source": opts.melody_source,
-         "octave": opts.octave, "piano_style": opts.piano_style}
+         "octave": opts.octave, "piano_style": opts.piano_style, "meter": opts.meter}
     if opts.simple:
         q["simple"] = "1"
     if opts.easy_key:

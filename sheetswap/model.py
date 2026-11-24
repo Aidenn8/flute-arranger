@@ -142,11 +142,12 @@ class ArrangeOptions:
     simple: bool = False
     easy_key: bool = False
     piano_style: str = "chords"
+    meter: int = 0                # 0 = as detected, else beats per bar (3 or 4)
 
     def key(self) -> str:
         return (f"{self.mode}-{self.melody_source}-o{self.octave:+d}-"
                 f"{'simple' if self.simple else 'full'}-"
-                f"{'easy' if self.easy_key else 'orig'}-{self.piano_style}")
+                f"{'easy' if self.easy_key else 'orig'}-{self.piano_style}-m{self.meter}")
 
     @classmethod
     def from_form(cls, d: Mapping) -> "ArrangeOptions":
@@ -159,6 +160,11 @@ class ArrangeOptions:
             opts.octave = max(-1, min(1, int(d.get("octave", 0))))
         except (TypeError, ValueError):
             opts.octave = 0
+        try:
+            m = int(d.get("meter", 0))
+            opts.meter = m if m in (0, 3, 4) else 0
+        except (TypeError, ValueError):
+            opts.meter = 0
         truthy = ("1", "on", "true", "yes", True)
         opts.simple = d.get("simple") in truthy
         opts.easy_key = d.get("easy_key") in truthy

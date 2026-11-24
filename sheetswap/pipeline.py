@@ -6,7 +6,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
 
-from .model import Analysis, ArrangeOptions, Arrangement, Note, QNote
+from .model import Analysis, ArrangeOptions, Arrangement, BeatGrid, Note, QNote
 
 ProgressFn = Callable[[int, int, str], None]
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
@@ -90,7 +90,7 @@ def _analyze_audio(src: Path, song_dir: Path, kind: str, progress: ProgressFn) -
     duration = audio.load_audio(src, mono)
 
     stems: dict[str, Path] = {}
-    if kind != "piano":
+    if kind not in ("piano", "ensemble"):
         progress(2, total, "Separating the instruments (singing, bass, drums, the rest)")
         stereo = song_dir / "stereo.wav"
         audio.load_stereo(src, stereo)
@@ -101,8 +101,18 @@ def _analyze_audio(src: Path, song_dir: Path, kind: str, progress: ProgressFn) -
 
     progress(3, total, "Writing down the notes")
     sources: dict[str, list[Note]] = {}
-    if kind == "piano":
+    if kind == "piano" and not stems:
+        # the user said solo piano: the piano model alone is the most accurate
         sources["piano"] = transcribe.piano(mono)
+    elif kind in ("piano", "ensemble"):
+        # no singing, drums or bass: piano, maybe with a violin, clarinet, ...
+        # The piano model hears the piano exactly but is deaf to other
+        # instruments; the general model hears everything. Notes only the
+        # general model heard belong to another instrument.
+        sources["piano"] = transcribe.piano(mono)
+        sources["other"] = transcribe.general(mono)
+        if kind == "piano" and unexplained_share(sources["other"], sources["piano"]) >= ENSEMBLE_SHARE:
+            kind = "ensemble"
     else:
         if kind == "song":
             sources["vocals"] = clean_monophonic(transcribe.general(stems["vocals"]))
@@ -115,6 +125,22 @@ def _analyze_audio(src: Path, song_dir: Path, kind: str, progress: ProgressFn) -
 
     progress(5, total, "Saving")
     return Analysis(song_id=song_dir.name, kind=kind, duration=duration, grid=grid, sources=sources)
+
+
+# Share of general-model notes the piano model didn't hear (same pitch, onset
+# within 80 ms). Measured on the bench: solo piano 0.05-0.16, piano with a
+# clarinet or violin 0.22-0.43.
+ENSEMBLE_SHARE = 0.19
+
+
+def unexplained_share(general: list[Note], piano: list[Note], tol: float = 0.08) -> float:
+    if not general:
+        return 0.0
+    starts: dict[int, list[float]] = {}
+    for m in piano:
+        starts.setdefault(m.pitch, []).append(m.start)
+    missed = sum(not any(abs(s - n.start) < tol for s in starts.get(n.pitch, ())) for n in general)
+    return missed / len(general)
 
 
 # ---------------------------------------------------------------- arrange
@@ -153,7 +179,9 @@ def pick_melody(an: Analysis, source: str) -> tuple[list[Note], str, list[str]]:
         return clean_monophonic(vocals), "vocals", warnings
     if s.get("midi_melody"):
         return s["midi_melody"], "midi_melody", warnings
-    for name in ("piano", "other", "midi_all"):
+    # in an ensemble the tune is usually the non-piano instrument
+    order = ("other", "piano", "midi_all") if an.kind == "ensemble" else ("piano", "other", "midi_all")
+    for name in order:
         if s.get(name):
             return top_voice(s[name]), name, warnings
     return [], "", warnings + ["No notes were found in this file."]
@@ -184,6 +212,8 @@ def arrange(an: Analysis, opts: ArrangeOptions) -> Arrangement:
 
     melody, used, warnings = pick_melody(an, opts.melody_source)
     grid = an.grid
+    if opts.meter in (3, 4) and opts.meter != grid.beats_per_bar:
+        grid = BeatGrid(grid.beats, opts.meter, grid.first_downbeat)
     line = quantize_line(melody, grid, simple=opts.simple)
 
     everything = [n for notes in an.sources.values() for n in notes]
