@@ -6,7 +6,9 @@
 
 **Architecture:** A Python package `sheetswap` with one module per step: analyze (slow, cached: load → separate → transcribe → beats) and arrange (fast: melody → flute fit → rhythm → piano → score → render). A Flask app with plain old-web HTML runs analysis in a background thread and re-arranges on option changes.
 
-**Tech Stack:** Python 3.11 (`.venv` via uv), torch, demucs, piano_transcription_inference, basic-pitch (onnx), librosa, music21, verovio, pretty_midi, mir_eval, Flask, pytest; Homebrew ffmpeg + fluid-synth.
+**Tech Stack:** Python 3.11 (`.venv` via uv), torch, demucs, piano_transcription_inference, basic-pitch (onnx), librosa, music21, verovio, pretty_midi, mir_eval, Flask, pytest; imageio-ffmpeg (bundled ffmpeg binary) + tinysoundfont (soundfont synth).
+
+**Changes made during the build:** Homebrew can't install ffmpeg/fluid-synth on this macOS 14 machine (Tier 3, needs the Command Line Tools), so audio decoding uses the ffmpeg binary bundled with `imageio-ffmpeg`, and preview audio uses `tinysoundfont` (installed with `--no-deps`). The `eval/` folder is named `bench/`. Polyphonic quantization lives in `piano.py` instead of `rhythm.py`. A command-line entry point `sheetswap/cli.py` was added.
 
 **Spec:** `docs/superpowers/specs/2026-11-24-flute-arranger-design.md`
 

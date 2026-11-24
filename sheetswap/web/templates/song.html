@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% from "macros.html" import radios %}
+{% block title %}{{ meta.title }} - Flute Arranger{% endblock %}
+{% block head %}{% if state == "busy" %}<meta http-equiv="refresh" content="2">{% endif %}{% endblock %}
+{% block body %}
+<p><a href="{{ url_for('index') }}">Flute Arranger</a> &gt; {{ meta.title }}</p>
+<h1>{{ meta.title }}</h1>
+
+{% if state == "busy" %}
+{% if meta.status == "queued" %}
+<p>Waiting to start&hellip;{% if other_busy %} (another song is being worked on first){% endif %}</p>
+{% elif meta.total %}
+<p>Working on it&hellip; Step {{ meta.step }} of {{ meta.total }}: {{ meta.message }}</p>
+{% else %}
+<p>Working on it&hellip; {{ meta.message }}</p>
+{% endif %}
+<p><small>Listening through a song takes a few minutes. This page updates by itself, and you can leave and come back later.</small></p>
+
+{% elif state == "failed" %}
+<p><b>Sorry, this song didn't work.</b></p>
+<p>{{ meta.error or "Something went wrong." }}</p>
+{% if log_tail %}
+<p>Details from the log:</p>
+<pre>{{ log_tail }}</pre>
+{% endif %}
+<form method="post" action="{{ url_for('delete', song_id=meta.id) }}"><input type="submit" value="Delete this song"></form>
+<p><a href="{{ url_for('index') }}">Upload another file</a></p>
+
+{% else %}
+<p><small>From &ldquo;{{ meta.filename }}&rdquo;, added {{ meta.added|nicedate }}.</small></p>
+
+<form method="get" action="{{ url_for('song', song_id=meta.id) }}">
+<table border="0" cellpadding="4">
+<tr>
+  <td valign="top">Make:</td>
+  <td>{{ radios("mode", opts.mode, [("solo", "flute only"), ("duet", "flute + piano")]) }}</td>
+</tr>
+<tr>
+  <td valign="top">Which part is the tune?</td>
+  <td>{{ radios("melody_source", opts.melody_source, [("auto", "let it guess"), ("vocals", "the singing"), ("piano", "the piano's top line"), ("other", "other instruments")]) }}</td>
+</tr>
+<tr>
+  <td valign="top">Octave:</td>
+  <td>{{ radios("octave", opts.octave, [("-1", "lower"), ("0", "as chosen"), ("1", "higher")]) }}</td>
+</tr>
+<tr>
+  <td valign="top">Easier:</td>
+  <td><label><input type="checkbox" name="simple" value="1"{% if opts.simple %} checked{% endif %}> Make it easier to play (fewer fast notes)</label><br>
+  <label><input type="checkbox" name="easy_key" value="1"{% if opts.easy_key %} checked{% endif %}> Move to an easier key</label></td>
+</tr>
+<tr>
+  <td valign="top">Piano part:</td>
+  <td>{{ radios("piano_style", opts.piano_style, [("chords", "simple chords"), ("cleaned", "follow the original")]) }}<br>
+  <small>Only used with flute + piano.</small></td>
+</tr>
+<tr>
+  <td></td>
+  <td><input type="submit" value="Update"> <small>Takes a few seconds.</small></td>
+</tr>
+</table>
+</form>
+
+<hr>
+
+{% if arrange_error %}
+<p><b>Sorry, the sheet music couldn't be made with these options.</b></p>
+<p>{{ arrange_error }}</p>
+<p><small>Try other options above. The details are in this song's log.txt.</small></p>
+{% else %}
+
+{% if warnings %}
+<p><b>Heads up:</b></p>
+<ul>
+{% for w in warnings %}
+<li>{{ w }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+
+{% if facts %}
+<p>Key: {{ facts.key }} &middot; Time: {{ facts.time }} &middot; Tempo: {{ facts.tempo }}</p>
+{% endif %}
+
+<p>Listen:</p>
+<table border="0" cellpadding="4">
+<tr>
+  <td>{% if opts.mode == "duet" %}Flute + piano{% else %}Flute{% endif %}:</td>
+  <td>{% if preview_url %}<audio controls preload="none" src="{{ preview_url }}"></audio>{% else %}<small>No preview (the sound tools aren't installed).</small>{% endif %}</td>
+</tr>
+<tr>
+  <td>Original:</td>
+  <td>{% if original_url %}<audio controls preload="none" src="{{ original_url }}"></audio>{% elif original_is_midi %}<small>It's a MIDI file, so it can't be played here.</small>{% else %}<small>Not found.</small>{% endif %}</td>
+</tr>
+</table>
+
+<p><a href="{{ print_url }}">Print / save as PDF</a>
+{% if musicxml_url %} | <a href="{{ musicxml_url }}">Download MusicXML</a> <small>(for MuseScore)</small>{% endif %}
+{% if midi_url %} | <a href="{{ midi_url }}">Download MIDI</a>{% endif %}
+</p>
+
+<hr>
+
+{% for svg in svgs %}
+<div>{{ svg|safe }}</div>
+{% else %}
+<p>No sheet music came out. Try other options above.</p>
+{% endfor %}
+{% endif %}
+{% endif %}
+{% endblock %}

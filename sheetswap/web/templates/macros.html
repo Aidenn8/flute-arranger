@@ -1,0 +1,7 @@
+{# A row of radio buttons. choices = [(value, label), ...] #}
+{% macro radios(name, current, choices) -%}
+{% for value, label in choices -%}
+<label><input type="radio" name="{{ name }}" value="{{ value }}"{% if current|string == value %} checked{% endif %}> {{ label }}</label>{% if not loop.last %}&nbsp;&nbsp;
+{% endif %}
+{%- endfor %}
+{%- endmacro %}

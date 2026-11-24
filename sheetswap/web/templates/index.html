@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% from "macros.html" import radios %}
+{% block body %}
+<h1>Flute Arranger</h1>
+<p>Turn any song you like into flute sheet music you can play.</p>
+
+{% if error %}
+<p><b>{{ error }}</b></p>
+{% endif %}
+
+<form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+<table border="0" cellpadding="4">
+<tr>
+  <td valign="top">File:</td>
+  <td><input type="file" name="file" accept="{{ accept }}" required><br>
+  <small>Audio (mp3, wav, m4a, aac, flac, ogg) or MIDI (mid, midi), up to {{ max_mb }} MB and {{ max_minutes }} minutes.</small></td>
+</tr>
+<tr>
+  <td valign="top">What is it?</td>
+  <td>{{ radios("kind", "auto", [("auto", "let it guess"), ("piano", "solo piano"), ("song", "song with singing"), ("band", "band, no singing")]) }}</td>
+</tr>
+<tr>
+  <td valign="top">Make:</td>
+  <td>{{ radios("mode", "solo", [("solo", "flute only"), ("duet", "flute + piano")]) }}</td>
+</tr>
+<tr>
+  <td></td>
+  <td><input type="submit" value="Upload"></td>
+</tr>
+</table>
+</form>
+<p><small>After you upload, it takes a few minutes to listen through the song. That only happens once per song; changing options afterwards takes seconds.</small></p>
+
+<hr>
+
+<h2>Your songs</h2>
+{% if songs %}
+<table border="1" cellpadding="4">
+<tr><th>Title</th><th>Added</th><th>Status</th><th></th></tr>
+{% for s in songs %}
+<tr>
+  <td><a href="{{ url_for('song', song_id=s.id) }}">{{ s.title }}</a></td>
+  <td>{{ s.added|nicedate }}</td>
+  <td>{{ s|status_text }}</td>
+  <td><form method="post" action="{{ url_for('delete', song_id=s.id) }}"><input type="submit" value="Delete"></form></td>
+</tr>
+{% endfor %}
+</table>
+{% else %}
+<p>No songs yet. Upload one above.</p>
+{% endif %}
+
+<hr>
+<p><small>Everything stays on this computer. Songs are kept in the <code>out</code> folder.</small></p>
+{% endblock %}
