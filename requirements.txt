@@ -13,3 +13,5 @@ piano_transcription_inference
 demucs
 basic-pitch[onnx]
 pytest
+imageio-ffmpeg
+tinysoundfont  # install with --no-deps (pyaudio not needed)
