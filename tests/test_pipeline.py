@@ -90,11 +90,15 @@ def test_pick_melody_missing_source_warns():
     assert used == "other" and warn
 
 
-def test_unexplained_share():
-    piano = [Note(60, 0.0, 0.5), Note(64, 0.5, 1.0)]
-    general = [Note(60, 0.02, 0.5), Note(64, 0.55, 1.0), Note(76, 0.0, 1.0), Note(77, 1.0, 2.0)]
-    assert pipeline.unexplained_share(general, piano) == 0.5
-    assert pipeline.unexplained_share([], piano) == 0.0
+def test_unheard_notes_and_cover():
+    piano = [Note(60 + (i % 2) * 4, i * 0.5, i * 0.5 + 0.45) for i in range(20)]
+    # the general model hears the piano (slightly off) plus a held violin line
+    general = [Note(n.pitch + (1 if i % 5 == 0 else 0), n.start + 0.05, n.end) for i, n in enumerate(piano)]
+    violin = [Note(76 + (i % 3), i * 1.0, i * 1.0 + 0.95) for i in range(10)]
+    assert pipeline.unheard_notes(general, piano) == []
+    assert pipeline.unheard_notes(general + violin, piano) == violin
+    assert pipeline.other_instrument_cover(general, piano, 10.0) == 0.0
+    assert pipeline.other_instrument_cover(general + violin, piano, 10.0) > pipeline.ENSEMBLE_COVER
 
 
 def test_ensemble_takes_tune_from_other_instrument():

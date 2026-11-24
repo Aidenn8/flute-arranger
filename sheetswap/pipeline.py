@@ -111,7 +111,8 @@ def _analyze_audio(src: Path, song_dir: Path, kind: str, progress: ProgressFn) -
         # general model heard belong to another instrument.
         sources["piano"] = transcribe.piano(mono)
         sources["other"] = transcribe.general(mono)
-        if kind == "piano" and unexplained_share(sources["other"], sources["piano"]) >= ENSEMBLE_SHARE:
+        if (kind == "piano" and other_instrument_cover(sources["other"], sources["piano"], duration)
+                >= ENSEMBLE_COVER):
             kind = "ensemble"
     else:
         if kind == "song":
@@ -127,20 +128,29 @@ def _analyze_audio(src: Path, song_dir: Path, kind: str, progress: ProgressFn) -
     return Analysis(song_id=song_dir.name, kind=kind, duration=duration, grid=grid, sources=sources)
 
 
-# Share of general-model notes the piano model didn't hear (same pitch, onset
-# within 80 ms). Measured on the bench: solo piano 0.05-0.16, piano with a
-# clarinet or violin 0.22-0.43.
-ENSEMBLE_SHARE = 0.19
+# Another instrument plays a continuous line the piano model can't hear; a
+# piano's leftovers are scattered overtones and fragments. So: take the
+# general-model notes the piano model didn't hear (within 120 ms and a
+# semitone), follow a line through them, and see how much of the song that
+# line covers. Measured: synthetic solo piano 0.02-0.14, real piano
+# recordings 0.17-0.18, piano with a clarinet or violin 0.29-0.81.
+ENSEMBLE_COVER = 0.24
 
 
-def unexplained_share(general: list[Note], piano: list[Note], tol: float = 0.08) -> float:
-    if not general:
-        return 0.0
+def unheard_notes(general: list[Note], piano: list[Note],
+                  tol: float = 0.12, semis: int = 1) -> list[Note]:
     starts: dict[int, list[float]] = {}
     for m in piano:
         starts.setdefault(m.pitch, []).append(m.start)
-    missed = sum(not any(abs(s - n.start) < tol for s in starts.get(n.pitch, ())) for n in general)
-    return missed / len(general)
+    return [n for n in general
+            if not any(abs(s - n.start) < tol
+                       for d in range(-semis, semis + 1) for s in starts.get(n.pitch + d, ()))]
+
+
+def other_instrument_cover(general: list[Note], piano: list[Note], duration: float) -> float:
+    from .melody import top_voice
+    line = top_voice(unheard_notes(general, piano))
+    return sum(n.end - n.start for n in line) / max(duration, 1.0)
 
 
 # ---------------------------------------------------------------- arrange
