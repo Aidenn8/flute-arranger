@@ -6,6 +6,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
+
 from .model import Analysis, ArrangeOptions, Arrangement, BeatGrid, Note, QNote
 
 ProgressFn = Callable[[int, int, str], None]
@@ -229,7 +231,14 @@ def arrange(an: Analysis, opts: ArrangeOptions) -> Arrangement:
     grid = an.grid
     bpb = opts.meter if opts.meter in (3, 4) else grid.beats_per_bar
     if bpb != grid.beats_per_bar or opts.barshift:
-        grid = BeatGrid(grid.beats, bpb, grid.first_downbeat + opts.barshift % bpb)
+        first = grid.first_downbeat + opts.barshift % bpb
+        # keep the pickup shorter than a bar (3 beats later = 1 beat earlier)
+        starts = [n.start for ns in an.sources.values() for n in ns]
+        if starts:
+            first_note_beat = int(np.floor(grid.to_beats(min(starts)))) + grid.first_downbeat
+            while first - bpb >= first_note_beat:
+                first -= bpb
+        grid = BeatGrid(grid.beats, bpb, first)
     line = quantize_line(melody, grid, simple=opts.simple)
 
     everything = [n for notes in an.sources.values() for n in notes]

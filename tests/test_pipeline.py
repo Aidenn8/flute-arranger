@@ -78,6 +78,20 @@ def _analysis(sources, duration=8.0):
     return Analysis("x", "song", duration, BeatGrid([i * 0.5 for i in range(20)], 4, 0), sources)
 
 
+def test_bar_shift_keeps_pickup_under_a_bar():
+    # music starts 3 beats before the first downbeat (a 3-beat pickup in 4/4)
+    grid = BeatGrid([i * 0.5 for i in range(40)], 4, 3)
+    piano = [Note(72 + (i % 4), i * 0.5, i * 0.5 + 0.45, 90) for i in range(30)]
+    an = Analysis("x", "piano", 20.0, grid, {"piano": piano})
+    for shift in range(4):
+        arr = pipeline.arrange(an, ArrangeOptions(barshift=shift))
+        first = min(q.start for q in arr.flute)
+        assert -48 < first <= 0, (shift, first)          # never a whole empty bar
+    starts = {s: min(q.start for q in pipeline.arrange(an, ArrangeOptions(barshift=s)).flute)
+              for s in range(4)}
+    assert starts == {0: -36, 1: 0, 2: -12, 3: -24}
+
+
 def test_pick_melody_prefers_singing():
     vocals = [Note(67 + (i % 3), i * 0.5, i * 0.5 + 0.45) for i in range(14)]
     other = [Note(84, i * 0.5, i * 0.5 + 0.45) for i in range(14)]
