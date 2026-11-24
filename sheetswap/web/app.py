@@ -47,6 +47,15 @@ INTERRUPTED = "Interrupted — please upload it again."
 app = Flask(__name__, template_folder=str(Path(__file__).parent / "templates"))
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 
+
+@app.before_request
+def _same_site_posts_only():
+    """Refuse form posts sent by other web sites (they could queue uploads here)."""
+    if request.method == "POST":
+        origin = request.headers.get("Origin")
+        if origin and origin.split("://", 1)[-1] != request.host:
+            abort(403)
+
 _ID_RE = re.compile(r"[0-9a-f]{6,32}")
 _lock = threading.Lock()            # guards meta.json / log.txt writes and deletes
 _arrange_lock = threading.Lock()    # one arrangement at a time

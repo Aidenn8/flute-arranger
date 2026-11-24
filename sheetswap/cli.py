@@ -61,7 +61,11 @@ def main(argv: list[str] | None = None) -> None:
         print(f"[{time.time() - t0:6.1f}s] step {step}/{total}: {msg}", flush=True)
         _set_meta(song_dir, step=step, total=total, message=msg)
 
-    an = pipeline.analyze(song_dir, a.kind, progress)
+    try:
+        an = pipeline.analyze(song_dir, a.kind, progress)
+    except BaseException as e:            # incl. Ctrl-C: don't leave the song "working" forever
+        _set_meta(song_dir, status="failed", error=str(e) or type(e).__name__)
+        raise
     _set_meta(song_dir, status="done", kind=an.kind)
     opts = ArrangeOptions(mode=a.mode, melody_source=a.melody, octave=a.octave,
                           simple=a.simple, easy_key=a.easy_key, piano_style=a.piano_style,

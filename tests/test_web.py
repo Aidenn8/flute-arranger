@@ -119,6 +119,17 @@ def test_upload_redirects(client, out):
     assert web._jobs.get_nowait() == song_id
 
 
+def test_posts_from_other_sites_refused(client, out):
+    data = lambda: {"file": (io.BytesIO(b"RIFF pretend"), "a.mp3"), "kind": "auto", "mode": "solo"}  # noqa: E731
+    bad = client.post("/upload", content_type="multipart/form-data", data=data(),
+                      headers={"Origin": "https://evil.example"})
+    assert bad.status_code == 403
+    assert not out.exists() or list(out.iterdir()) == []
+    ok = client.post("/upload", content_type="multipart/form-data", data=data(),
+                     headers={"Origin": "http://localhost"})          # the test client's host
+    assert ok.status_code == 302
+
+
 def test_upload_bad_choices_fall_back(client, out):
     resp = client.post("/upload", content_type="multipart/form-data", data={
         "file": (io.BytesIO(b"MThd"), "tune.midi"), "kind": "opera", "mode": "trio"})

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
@@ -43,7 +44,10 @@ def analyze(song_dir: Path, kind: str = "auto", progress: ProgressFn = _noop) ->
     song_dir = Path(song_dir)
     cached = song_dir / "analysis.json"
     if cached.exists():
-        return Analysis.load(cached)
+        try:
+            return Analysis.load(cached)
+        except (OSError, ValueError, KeyError, TypeError):
+            pass                                  # unreadable cache: analyze again
     src = find_input(song_dir)
     if src.suffix.lower() in MIDI_EXTS:
         progress(1, 2, "Reading the MIDI file")
@@ -51,7 +55,9 @@ def analyze(song_dir: Path, kind: str = "auto", progress: ProgressFn = _noop) ->
     else:
         an = _analyze_audio(src, song_dir, kind, progress)
     an.title = _title(song_dir)
-    an.save(cached)
+    tmp = song_dir / "analysis.json.tmp"
+    an.save(tmp)
+    os.replace(tmp, cached)
     return an
 
 
@@ -259,6 +265,8 @@ def arrange(an: Analysis, opts: ArrangeOptions) -> Arrangement:
     if opts.mode == "duet":
         pool, bass = _accompaniment_pool(an, used, melody)
         rh, lh = accompany(pool, line, grid, opts.piano_style, shift=shift, bass=bass)
+        if not rh and not lh:
+            warnings.append("No chords could be found for a piano part, so this is the flute alone.")
 
     arr = Arrangement(flute=line, rh=rh, lh=lh, beats_per_bar=grid.beats_per_bar,
                       bpm=round(grid.bpm()), key_fifths=fifths, key_mode=mode,
@@ -268,6 +276,21 @@ def arrange(an: Analysis, opts: ArrangeOptions) -> Arrangement:
 
 
 # ---------------------------------------------------------------- render (cached per option set)
+
+def write_atomic(path: Path, text: str) -> None:
+    """Write via a temp file + rename, so a crash never leaves half a cache file."""
+    tmp = Path(str(path) + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def _read_json(path: Path) -> dict | None:
+    """A cache file's contents, or None if it's missing or unreadable (then it's rebuilt)."""
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+
 
 def _arr_from_json(d: dict) -> Arrangement:
     d = dict(d)
@@ -283,7 +306,8 @@ def arrange_and_render(song_dir: Path, opts: ArrangeOptions) -> dict:
     song_dir = Path(song_dir)
     out = song_dir / "arr" / opts.key()
     info_path = out / "info.json"
-    if not info_path.exists():
+    info = _read_json(info_path)
+    if info is None:
         an = Analysis.load(song_dir / "analysis.json")
         arr = arrange(an, opts)
         out.mkdir(parents=True, exist_ok=True)
@@ -300,8 +324,7 @@ def arrange_and_render(song_dir: Path, opts: ArrangeOptions) -> dict:
             "mp3": mp3.name if mp3 else None,
             "arr": asdict(arr),
         }
-        info_path.write_text(json.dumps(info))
-    info = json.loads(info_path.read_text())
+        write_atomic(info_path, json.dumps(info))
     arr = _arr_from_json(info["arr"])
     return {
         "svgs": [(out / f"page-{i}.svg").read_text() for i in range(1, info["pages"] + 1)],

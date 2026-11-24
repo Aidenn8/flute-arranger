@@ -47,6 +47,24 @@ def test_midi_end_to_end_solo_and_duet(tmp_path):
             assert not arr.rh and not arr.lh
 
 
+def test_corrupt_caches_are_rebuilt(tmp_path):
+    d = _song(tmp_path)
+    pipeline.analyze(d)
+    opts = ArrangeOptions()
+    pipeline.arrange_and_render(d, opts)
+    (d / "arr" / opts.key() / "info.json").write_text('{"pages": 1, "musi')   # killed mid-write
+    (d / "analysis.json").write_text('{"song_id"')
+    assert pipeline.analyze(d).kind == "midi"
+    assert pipeline.arrange_and_render(d, opts)["svgs"]
+
+
+def test_duet_without_chords_says_so():
+    an = _analysis({"midi_melody": [Note(72, 0.0, 0.5)], "midi_all": [Note(72, 0.0, 0.5)]})
+    arr = pipeline.arrange(an, ArrangeOptions(mode="duet"))
+    assert not arr.rh and not arr.lh
+    assert any("flute alone" in w for w in arr.warnings)
+
+
 def test_render_is_cached(tmp_path):
     d = _song(tmp_path)
     pipeline.analyze(d)
