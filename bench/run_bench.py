@@ -29,7 +29,8 @@ from sheetswap.config import OUT_DIR, TICKS_PER_BEAT  # noqa: E402
 from sheetswap.model import ArrangeOptions  # noqa: E402
 
 GT = ROOT / "samples" / "gt"
-SETS = {"A": ("A_piano.wav", "piano"), "B": ("B_mix.wav", "auto"), "C": ("C_arpeggio.wav", "piano")}
+SETS = {"A": ("A_piano.wav", "piano"), "B": ("B_mix.wav", "auto"), "C": ("C_arpeggio.wav", "piano"),
+        "D": ("D_song.wav", "song")}
 ONSET_TOL = 0.08
 
 

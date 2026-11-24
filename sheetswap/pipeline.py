@@ -84,7 +84,6 @@ def _analyze_midi(src: Path, song_id: str) -> Analysis:
 def _analyze_audio(src: Path, song_dir: Path, kind: str, progress: ProgressFn) -> Analysis:
     from . import audio, separate, transcribe
     from .beats import track_beats
-    from .melody import clean_monophonic
 
     total = 5
     progress(1, total, "Reading the file")
@@ -118,7 +117,8 @@ def _analyze_audio(src: Path, song_dir: Path, kind: str, progress: ProgressFn) -
             kind = "ensemble"
     else:
         if kind == "song":
-            sources["vocals"] = clean_monophonic(transcribe.general(stems["vocals"]))
+            # a pitch tracker made for one voice: vibrato averages out, one note per syllable
+            sources["vocals"] = transcribe.vocal_line(stems["vocals"])
         sources["other"] = transcribe.general(stems["other"])
         sources["bass"] = transcribe.general(stems["bass"])
 
@@ -163,9 +163,10 @@ def _coverage(notes: list[Note]) -> float:
 
 
 def _as_melody(name: str, notes: list[Note]) -> list[Note]:
-    from .melody import top_voice, clean_monophonic, piano_melody
+    from .melody import top_voice, piano_melody
     if name == "vocals":
-        return clean_monophonic(notes)
+        # already one clean line; merging touching same-pitch notes would undo re-sung notes
+        return sorted(notes, key=lambda n: n.start)
     if name in ("piano", "midi_all"):
         return piano_melody(notes)
     return top_voice(notes)
@@ -173,8 +174,6 @@ def _as_melody(name: str, notes: list[Note]) -> list[Note]:
 
 def pick_melody(an: Analysis, source: str) -> tuple[list[Note], str, list[str]]:
     """Return (melody notes in seconds, source used, warnings)."""
-    from .melody import top_voice, clean_monophonic
-
     s = an.sources
     warnings: list[str] = []
     order = {
@@ -193,7 +192,7 @@ def pick_melody(an: Analysis, source: str) -> tuple[list[Note], str, list[str]]:
 
     vocals = s.get("vocals") or []
     if vocals and _coverage(vocals) >= 0.15 * max(an.duration, 1.0):
-        return clean_monophonic(vocals), "vocals", warnings
+        return _as_melody("vocals", vocals), "vocals", warnings
     if s.get("midi_melody"):
         return s["midi_melody"], "midi_melody", warnings
     # in an ensemble the tune is usually the non-piano instrument

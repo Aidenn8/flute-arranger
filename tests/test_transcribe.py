@@ -30,6 +30,52 @@ def matches(notes, pitch, onset, tol=0.06):
     return [n for n in notes if n.pitch == pitch and abs(n.start - onset) <= tol]
 
 
+# C5 D5 E5 E5 G5 as (pitch, onset, length); the second E5 is sung again
+SUNG = [(72, 0.3, 0.45), (74, 0.75, 0.55), (76, 1.3, 0.5), (76, 1.8, 0.45), (79, 2.25, 0.7)]
+
+
+def sung_line(path, notes, seconds=3.4, vibrato_cents=50.0, rate=5.5, glide=0.04, dip=0.15):
+    """A legato sung line: one continuous tone (5 harmonics) whose pitch
+    glides from note to note with +-vibrato_cents vibrato at `rate` Hz.
+    Between two notes of the same pitch the loudness dips to `dip` (a
+    consonant), not to silence; the line fades in and out at its ends."""
+    t = np.arange(int(seconds * SR)) / SR
+    pitch = np.full(t.shape, float(notes[0][0]))
+    for (p0, s0, _), (p1, s1, _) in zip(notes, notes[1:]):
+        pitch[t >= s1] = p1
+        ramp = (t >= s1 - glide / 2) & (t < s1 + glide / 2)
+        pitch[ramp] = p0 + (p1 - p0) * (t[ramp] - (s1 - glide / 2)) / glide
+    pitch += vibrato_cents / 100 * np.sin(2 * np.pi * rate * t)
+    phase = 2 * np.pi * np.cumsum(440.0 * 2 ** ((pitch - 69) / 12)) / SR
+    tone = sum(np.sin(k * phase) / k for k in range(1, 6))
+    start, end = notes[0][1], notes[-1][1] + notes[-1][2]
+    amp = np.clip(np.minimum((t - start) / 0.04, (end - t) / 0.06), 0, 1)
+    for (p0, _, _), (p1, s1, _) in zip(notes, notes[1:]):
+        if p0 == p1:
+            amp *= 1 - (1 - dip) * np.clip(1 - np.abs(t - s1) / 0.05, 0, 1)
+    sf.write(path, (0.4 * amp * tone / np.abs(tone).max()).astype(np.float32), SR)
+
+
+def test_vocal_line_one_note_per_sung_pitch(tmp_path):
+    wav = tmp_path / "sung.wav"
+    sung_line(wav, SUNG)
+    t0 = time.perf_counter()
+    notes = transcribe.vocal_line(wav)
+    print(f"vocal_line: {time.perf_counter() - t0:.2f} s, "
+          f"{[(n.pitch, round(n.start, 3), round(n.end, 3), n.velocity) for n in notes]}")
+    assert [n.pitch for n in notes] == [p for p, _, _ in SUNG]
+    for n, (_, onset, _) in zip(notes, SUNG):
+        assert abs(n.start - onset) <= 0.08, f"{n} should start near {onset} s"
+    assert all(a.end <= b.start for a, b in zip(notes, notes[1:])), "notes overlap"
+    assert all(1 <= n.velocity <= 127 for n in notes)
+
+
+def test_vocal_line_silence(tmp_path):
+    wav = tmp_path / "silence.wav"
+    sf.write(wav, np.zeros(2 * SR, dtype=np.float32), SR)
+    assert transcribe.vocal_line(wav) == []
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("name", ["piano", "general"])
 def test_arpeggio_pitches_and_onsets(tmp_path, name):
