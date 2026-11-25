@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block head %}{% if rec.state in ("starting", "recording") %}<meta http-equiv="refresh" content="2">{% endif %}{% endblock %}
+{% block body %}
+<p><a href="{{ url_for('index') }}">Flute Arranger</a> &gt; Listening</p>
+<h1>{{ rec.info.get("title", "Recording") }}</h1>
+
+{% if rec.state == "starting" %}
+<p>Getting ready&hellip;</p>
+{% elif rec.state == "recording" %}
+<p><b>Listening: {{ clock }}</b></p>
+{% if rec.heard %}
+<p>Hearing sound. Let the song play to the end, then press Stop.</p>
+{% else %}
+<p>Silent so far. Play your song now, from the beginning.</p>
+{% endif %}
+<p><small>It stops by itself after {{ max_minutes }} minutes. Quiet at the start and end is cut off.</small></p>
+{% elif rec.state == "done" %}
+<p><b>Finished: {{ clock }} recorded.</b></p>
+{% elif rec.state == "error" and rec.error == "permission" %}
+<p><b>macOS didn't allow listening yet.</b> Go back to the <a href="{{ url_for('index') }}">start page</a> for how to turn it on.</p>
+{% elif rec.state == "error" %}
+<p><b>The recording stopped:</b> {{ rec.error }}</p>
+{% endif %}
+
+<table border="0" cellpadding="4">
+<tr>
+{% if rec.state in ("starting", "recording", "done") %}
+  <td><form method="post" action="{{ url_for('listen_stop') }}"><input type="submit" value="Stop and make the sheet music"></form></td>
+{% endif %}
+  <td><form method="post" action="{{ url_for('listen_cancel') }}"><input type="submit" value="Cancel"></form></td>
+</tr>
+</table>
+<hr>
+<p><small>This page updates itself every two seconds while listening.</small></p>
+{% endblock %}

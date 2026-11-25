@@ -348,15 +348,111 @@ def status_text(meta: Mapping) -> str:
 
 # ---------------------------------------------------------------- pages
 
-def _index(error: str | None = None) -> str:
+def _index(error: str | None = None, listen_note: str | None = None) -> str:
+    rec = _recorder()
     return render_template("index.html", songs=list_songs(), error=error,
                            accept=",".join("." + t for t in UPLOAD_TYPES),
-                           max_mb=MAX_UPLOAD_MB, max_minutes=config.MAX_SECONDS // 60)
+                           max_mb=MAX_UPLOAD_MB, max_minutes=config.MAX_SECONDS // 60,
+                           listen_permission=rec.permission(), listening=rec.busy(),
+                           listen_note=listen_note)
 
 
 @app.get("/")
 def index():
     return _index()
+
+
+# ---------------------------------------------------------------- listen to this computer
+
+def _recorder():
+    from .. import listen
+    return listen.recorder
+
+
+def _listen_wav() -> Path:
+    return _out_dir() / "_listening" / "recording.wav"
+
+
+@app.post("/listen/start")
+def listen_start():
+    rec = _recorder()
+    if rec.busy():
+        return redirect(url_for("listen_page"))
+    if rec.permission() != "ok":
+        return _index(listen_note="permission"), 403
+    title = (request.form.get("title") or "").strip()[:200]
+    kind = request.form.get("kind")
+    mode = request.form.get("mode")
+    info = {"title": title or datetime.now().strftime("Recording %b %-d, %-I:%M %p"),
+            "kind": kind if kind in KINDS else "auto",
+            "mode": mode if mode in MODES else "solo"}
+    rec.start(_listen_wav(), info)
+    return redirect(url_for("listen_page"))
+
+
+@app.get("/listen")
+def listen_page():
+    rec = _recorder()
+    if rec.state == "idle":
+        return redirect(url_for("index"))
+    secs = int(rec.elapsed())
+    return render_template("listen.html", rec=rec, clock=f"{secs // 60}:{secs % 60:02d}",
+                           max_minutes=config.MAX_SECONDS // 60)
+
+
+@app.post("/listen/stop")
+def listen_stop():
+    from .. import listen
+
+    rec = _recorder()
+    if rec.state == "idle":
+        return redirect(url_for("index"))
+    rec.stop()
+    info, raw = dict(rec.info), rec.out
+    if rec.state == "error" or raw is None or not raw.exists():
+        note = "permission" if rec.error == "permission" else "failed"
+        rec.cancel()
+        return _index(listen_note=note)
+    d = _new_song_dir()
+    try:
+        kept = listen.trim_silence(raw, d / "input.wav")
+    except Exception:
+        shutil.rmtree(d, ignore_errors=True)
+        rec.cancel()
+        raise
+    rec.cancel()                                    # removes the raw recording
+    if kept < 2.0:
+        shutil.rmtree(d, ignore_errors=True)
+        return _index(listen_note="silent")
+    _write_meta(d, new_meta(d.name, info["title"] + ".wav", info["kind"], info["mode"]))
+    log(d, f"Recorded {kept:.0f} s from this computer")
+    queue_song(d.name)
+    return redirect(url_for("song", song_id=d.name))
+
+
+@app.post("/listen/cancel")
+def listen_cancel():
+    _recorder().cancel()
+    return redirect(url_for("index"))
+
+
+@app.post("/listen/permission")
+def listen_permission():
+    _recorder().request_permission()
+    return redirect(url_for("index"))
+
+
+def _new_song_dir() -> Path:
+    """A new, empty out/<random id>/ folder."""
+    out = _out_dir()
+    out.mkdir(parents=True, exist_ok=True)
+    while True:
+        song_id = secrets.token_hex(4)
+        try:
+            (out / song_id).mkdir()
+            return out / song_id
+        except FileExistsError:
+            continue
 
 
 @app.post("/upload")
@@ -376,16 +472,8 @@ def upload():
     mode = request.form.get("mode")
     mode = mode if mode in MODES else "solo"
 
-    out = _out_dir()
-    out.mkdir(parents=True, exist_ok=True)
-    while True:
-        song_id = secrets.token_hex(4)
-        try:
-            (out / song_id).mkdir()
-            break
-        except FileExistsError:
-            continue
-    d = out / song_id
+    d = _new_song_dir()
+    song_id = d.name
     dest = d / f"input.{ext}"
     try:
         f.save(dest)

@@ -33,6 +33,49 @@
 
 <hr>
 
+<h2>Or listen to this computer</h2>
+<p>Play a song on this Mac (Spotify, YouTube, anything) and it will write it down.</p>
+{% if listen_note == "silent" %}
+<p><b>I didn't hear anything.</b> Start listening first, then play the song, then press Stop.</p>
+{% elif listen_note == "failed" %}
+<p><b>The recording didn't work.</b> Please try again.</p>
+{% endif %}
+{% if listening %}
+<p><b>Listening right now.</b> <a href="{{ url_for('listen_page') }}">Go to the recording</a>.</p>
+{% elif listen_permission == "ok" %}
+<form method="post" action="{{ url_for('listen_start') }}">
+<table border="0" cellpadding="4">
+<tr>
+  <td valign="top">Name it:</td>
+  <td><input type="text" name="title" size="40" maxlength="200"> <small>(optional)</small></td>
+</tr>
+<tr>
+  <td valign="top">What is it?</td>
+  <td>{{ radios("kind", "auto", [("auto", "let it guess"), ("piano", "solo piano"), ("ensemble", "piano with other instruments (no singing, no drums)"), ("song", "song with singing"), ("band", "band with drums, no singing")]) }}</td>
+</tr>
+<tr>
+  <td valign="top">Make:</td>
+  <td>{{ radios("mode", "solo", [("solo", "flute only"), ("duet", "flute + piano")]) }}</td>
+</tr>
+<tr>
+  <td></td>
+  <td><input type="submit" value="Start listening"> <small>Then play your song from the beginning. Up to {{ max_minutes }} minutes.</small></td>
+</tr>
+</table>
+</form>
+{% elif listen_permission == "no" or listen_note == "permission" %}
+<p><b>macOS needs your OK first.</b> It treats listening to the computer's sound like screen recording.</p>
+<ol>
+<li>Press this button: <form method="post" action="{{ url_for('listen_permission') }}" style="display:inline"><input type="submit" value="Ask macOS for permission"></form></li>
+<li>In <b>System Settings &rarr; Privacy &amp; Security &rarr; Screen &amp; System Audio Recording</b>, turn on the app you started Flute Arranger from (usually <b>Terminal</b>).</li>
+<li>Quit that app, open it again, and run <code>./run.sh</code> again.</li>
+</ol>
+{% else %}
+<p><small>To turn this on, run <code>scripts/build_sysaudio.sh</code> once, then restart Flute Arranger.</small></p>
+{% endif %}
+
+<hr>
+
 <h2>Your songs</h2>
 {% if songs %}
 <table border="1" cellpadding="4">
