@@ -65,18 +65,30 @@ And for the flute + piano parts together (`bench/music_audit.md`, which also che
 | Piano plus a solo instrument | 6.1% (was 18.9%) | 92% | 85% |
 | Singing over piano and drums | 4.1% (was 15.4%) | 92% | 86% |
 
-On real recordings:
-- **Piano pieces played with a clear melody** (Satie's Gymnopédie No. 1, Chopin's Nocturne Op. 9 No. 2) come out right: it follows the notes the pianist plays louder, and stays quiet through a chords-only intro.
-- **Songs with singing** (tested on a soprano and a male singer with a band): the notes of the tune come out right, one note per sung syllable. Singers stretch the rhythm a lot, so turn on **Make it easier to play**: the anthem then reads in plain quarters, halves and 8ths.
-- **Very free tempo** (e.g. Für Elise played with lots of rubato) gets the right notes but a busier rhythm than the printed music.
-- **Beat and bars**: the meter is usually right; with drums the beat is sometimes twice the real tempo, and where the bar starts is the weakest part. Use *Beat*, *Time* and *Bar lines* when the score reads oddly.
+### Against real sheet music
 
-It works best on recordings where the tune is clear: one main instrument or voice carrying it, not too much reverb.
+`bench/ref_score.py` checks the flute part against the published scores of 10 real recordings (5 piano, 5 violin; sources in `bench/REFERENCES.md`), note by note, and also *listens*: it plays our flute part and the score's melody back as flute and compares their timing.
 
-Known limits:
-- Only 3/4 and 4/4: music in 3/8, 6/8 or 12/8 (Für Elise, Chopin's Nocturne) is written in 4/4, so it reads busier than the printed music.
-- Bar lines are placed where the tune's long notes fall (right in about 60% of the test pieces, up from about 25%); very slow, freely played piano (Gymnopédie) can drift a beat. Use **Bar lines** when the strong beats sit in the wrong place.
-- Notes faster than about 1/7 s in a sung line are merged into their neighbours; a male voice that sits between two pitches can land a semitone off.
+| Piece (real recording) | Time | Note starts exactly where the score has them | Listening: our flute vs the score |
+|---|---|---|---|
+| Satie, Gymnopédie No. 1 (piano) | 3/4 ✓ | 97% | on time (median 0 ms) |
+| Beethoven, Für Elise (piano) | 3/8 ✓ | 82% | on time |
+| Bach, Allemanda BWV 1004 (violin) | 4/4 ✓ | 73% (92% within a 16th) | on time |
+| Bach, Gavotte BWV 1006 (violin) | 4/4 for 2/2 | 74% | on time |
+| Bach, Menuet BWV 1006 (violin) | 3/4 ✓ | 72% | on time |
+| Chopin, Nocturne Op. 9 No. 2 (piano) | 12/8 ✓ | 57% | about a tenth of a beat off |
+| Schumann, Träumerei (piano) | 4/4 ✓ | 34% | drifts |
+| Debussy, Clair de lune (piano) | 3/4 at double speed (real: 9/8) | 36% | drifts |
+| Bach, Air (strings) | 4/4 at double speed | 17% (54% within a 16th) | try **Beat: half as fast** |
+| Schubert, Ave Maria (violin + piano) | 3/4 (real: 4/4) | 21% | drifts |
+
+What this means for a recording you bring:
+- **Steady pieces with a clear tune** come out close to the printed music, including 3/8, 6/8 and 12/8.
+- **Very slow, very free playing** (Träumerei, Clair de lune) and pieces where the beat tracker hears the 8th or the triplet as the beat still come out at the wrong note level. Use **Beat** (half / twice as fast) and **Time** to fix the level and meter; **Bar lines** if beat 1 sits in the wrong place.
+- **Songs with singing**: the notes of the tune come out right, one note per sung syllable; singers stretch rhythm a lot, so **Make it easier to play** gives the most readable result.
+- It finds the tune best when one instrument or voice clearly carries it; in broken-chord piano writing (Für Elise) some chord notes of the tune are still missed (58% of Für Elise's notes found).
+
+Known limits: 16th-note triplets and 32nd runs are simplified; violin double stops lose their lower note; a male voice that sits between two pitches can land a semitone off.
 
 ## Setting it up from scratch
 
@@ -98,10 +110,10 @@ On macOS 14 the models run on the CPU (the Apple GPU path crashes there), so a 4
 
 1. **Separate** the song into singing, drums, bass and the rest (Demucs), unless it's solo piano.
 2. **Write down the notes**: a piano model (ByteDance's piano transcription) and a general model for any instrument (Spotify's Basic Pitch). Notes only the general model hears belong to some other instrument, which tells "solo piano" apart from "piano + violin".
-3. **Find the beat and the meter** from the drums, or from the transcribed notes. Where the notes fall inside each beat tells 6/8-type music (beats split in three, written 9/8 or 12/8) from 2/4-3/4-4/4, and fast three-beat bars split in two become 3/8.
+3. **Find the beat and the bars** with Beat This! (a neural beat and downbeat tracker, ISMIR 2024), which follows a performer's tempo changes; 3 vs 4 beats a bar is settled by which bar length makes the rhythm repeat. Where the notes fall inside each beat tells 6/8-type music (beats split in three, written 9/8 or 12/8) from 2/4-3/4-4/4, and fast three-beat bars split in two become 3/8.
 4. **Pick the tune**: the singing if there is any; the notes a pianist plays louder; otherwise the highest sensible line through the notes.
 5. **Fit it to the flute**: one octave move for the whole piece, then whole phrases moved where needed, never single notes.
-6. **Clean the rhythm**: snap to plain 8ths where the playing allows, hold notes through short gaps, add breath marks in long phrases.
+6. **Write the rhythm**: each beat is read as the most likely printed figure (two 8ths, dotted 8th + 16th, a 16th run, ...) given where the notes were played, learning the piece's own common figures; triplets only where the piece really uses them; notes held through short gaps; breath marks in long phrases.
 7. **Piano part**: one chord per beat at most, chosen across the whole piece at once (dynamic programming): chords that contain the tune's strong-beat notes, belong to the key, move the way real progressions do (ii–V–I, cadences at phrase ends), with 7th chords and the real bass note (inversions included). A tune with no accompaniment is harmonized. Voiced below the flute, never above it.
 8. **Engrave** with Verovio, and play a preview with a soundfont.
 

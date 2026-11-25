@@ -3,35 +3,6 @@
 `bench/ref_score.py` on the reference set in `samples/ref/` (sources: `bench/REFERENCES.md`).
 Default options, flute alone. All beats are written quarter notes.
 
-## Rhythm and tune changes: before → after
-
-Same beat grids for both columns (the cached analyses and beat code as of commit 09ebcf5);
-before = the rhythm, melody and pipeline code of that commit, after = with these changes:
-rhythm read as per-beat patterns with the piece's own vocabulary (8ths stay 8ths, triplets
-only in pieces that clearly play them, notes leaned into a beat land on it, sung scoops left
-out); a violin's split held notes rejoined (unless the piano model heard a new attack); Für
-Elise's broken chords kept as part of the tune; a tune note held while chords strike its key
-again (Gymnopédie's F#4). Listening = "vs score" deviation.
-
-| piece | found | exact | ±16th | same len | ties/bar (score) | <8th % (score) | listen dev med / p90 ms | notes >50 ms |
-|---|---|---|---|---|---|---|---|---|
-| fur_elise | 42.1 → 58.3 | 74.1 → 81.9 | 76.7 → 86.6 | 55.2 → 63.6 | 0.33 → 0.28 (0.00) | 57.5 → 63.4 (82) | 0/413 → 0/257 | 27.4 → 25.6 |
-| gymnopedie_1 | 98.3 → 98.3 | 96.6 → 96.6 | 96.6 → 96.6 | 87.1 → 87.9 | 0.21 → 0.26 (0.23) | 2.9 → 0.0 (0) | 0/0 → 0/0 | 1.8 → 2.8 |
-| nocturne_op9_2 | 70.2 → 73.4 | 52.6 → 56.7 | 67.4 → 65.4 | 57.2 → 63.8 | 1.19 → 1.05 (0.03) | 35.7 → 34.2 (55) | 166/679 → 112/686 | 67.5 → 57.2 |
-| menuet_bwv1006 | 66.8 → 66.3 | 62.6 → 72.1 | 78.0 → 80.3 | 50.4 → 71.3 | 0.57 → 0.27 (0.00) | 32.5 → 12.0 (2) | 42/396 → 0/483 | 49.6 → 40.0 |
-| gavotte_bwv1006 | 58.5 → 58.8 | 69.2 → 74.0 | 70.0 → 75.3 | 55.6 → 54.8 | 1.24 → 1.18 (0.00) | 68.2 → 59.5 (2) | 0/395 → 0/395 | 37.6 → 38.2 |
-| allemanda_bwv1004 | 75.4 → 75.6 | 69.6 → 73.3 | 91.2 → 92.4 | 70.8 → 72.4 | 0.82 → 0.71 (0.00) | 86.4 → 85.5 (99) | 0/215 → 0/191 | 32.5 → 27.1 |
-| traumerei | 45.6 → 45.6 | 27.4 → 34.2 | 38.4 → 35.6 | 43.8 → 52.1 | 0.70 → 0.43 (0.00) | 18.4 → 3.3 (0) | 376/1751 → 441/1884 | 73.3 → 76.7 |
-| clair_de_lune | 50.0 → 50.0 | 37.7 → 36.4 | 57.6 → 57.0 | 25.2 → 29.1 | 0.70 → 0.59 (0.32) | 12.3 → 4.7 (7) | 310/1984 → 245/1866 | 70.9 → 72.1 |
-| schubert_ave_maria | 52.3 → 53.7 | 10.1 → 20.9 | 38.3 → 54.9 | 12.1 → 24.2 | 0.76 → 0.71 (0.00) | 53.6 → 30.3 (70) | 294/1434 → 467/1543 | 74.2 → 87.8 |
-| air_bwv1068 | 46.4 → 46.0 | 11.7 → 16.5 | 51.6 → 54.3 | 23.4 → 26.8 | 1.64 → 1.18 (0.06) | 60.4 → 30.3 (68) | 249/1768 → 334/1768 | 87.1 → 87.7 |
-| **mean** | 60.6 → 62.6 | 51.2 → 56.3 | 66.6 → 69.8 | 48.1 → 54.6 | 0.82 → 0.67 | 42.8 → 32.3 | 144/904 → 160/907 | 52.2 → 51.5 |
-
-The Gavotte's and Clair de lune's <8th shares can't reach the score's while their beat is
-half/twice the written one. Listening got worse on Schubert, the Air and Träumerei (bar or
-tempo still wrong there); for Schubert and the Air it grows with how many split notes are
-rejoined, though their onsets and lengths match the score better.
-
 ## Notes and timing
 
 | piece | instr. | notes found | pitch right | extra | onset exact | onset ±16th | timing off (mean, beats) | early / late | same length | same gap to next | meter ours / real | bar = real bar | bar lines off by (q) | beat slips | tempo ratio | raw: onset in bar | raw: downbeats on bar lines |
