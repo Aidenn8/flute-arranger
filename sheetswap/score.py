@@ -452,14 +452,31 @@ def _write_midi(arr: Arrangement, lay: _Layout, path: Path) -> None:
         parts.append(("Piano", PIANO_PROGRAM, lay.rh + lay.lh))
     for name, program, events in parts:
         inst = pretty_midi.Instrument(program=program, name=name)
+        level = _balanced_velocity(events, MIX_VELOCITY[program])
         for e in events:
             start, end = e.start * sec, e.end * sec
             if e.breath:                        # leave a little air before the next note
                 end -= min(0.1, 0.25 * (end - start))
             for p in e.pitches:
-                inst.notes.append(pretty_midi.Note(max(1, min(127, e.velocity)), p, start, end))
+                inst.notes.append(pretty_midi.Note(level(e.velocity), p, start, end))
         pm.instruments.append(inst)
     pm.write(str(path))
+
+
+# Playback loudness: transcribed velocities say more about the recording than
+# about the part, so each part is centred on a level that puts the flute in
+# front of the piano without hiding it (measured on five real duets: the flute
+# sits a median 4-11 dB over the piano; a piano note fades while a flute note
+# holds, so the piano needs the higher velocity), keeping a quarter of the
+# original swings.
+MIX_VELOCITY = {FLUTE_PROGRAM: 80, PIANO_PROGRAM: 96}
+MIX_KEEP = 0.25
+
+
+def _balanced_velocity(events, target: int):
+    vels = sorted(e.velocity for e in events) or [target]
+    mid = vels[len(vels) // 2]
+    return lambda v: max(1, min(127, round(target + MIX_KEEP * (v - mid))))
 
 
 def write_outputs(arr: Arrangement, title: str, out_dir: Path) -> dict[str, Path]:

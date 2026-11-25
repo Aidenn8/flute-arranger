@@ -42,7 +42,27 @@ def fit_to_flute(line: list[QNote], octave: int = 0) -> tuple[list[QNote], int]:
     out = [replace(n, pitch=n.pitch + shift) for n in line]
     for phrase in _phrases(out):
         _fold(out, phrase)
+        _fix_octave_slips(out, phrase)
     return out, shift
+
+
+SLIP = 7    # semitones: a note this far from both neighbours, on the same side, is an octave slip
+
+
+def _fix_octave_slips(line: list[QNote], idx: list[int]) -> None:
+    """Move single notes that stick out an octave from both neighbours.
+
+    Transcription (and octave folding) sometimes puts one note an octave off:
+    E5 E4 E5. A real leap stays near at least one neighbour (C5 C6 B5), so
+    only notes more than a 7th away from both, on the same side, move.
+    """
+    for a, i, b in zip(idx, idx[1:], idx[2:]):
+        p, before, after = line[i].pitch, line[a].pitch, line[b].pitch
+        up, down = p - before, p - after
+        if abs(up) > SLIP and abs(down) > SLIP and (up > 0) == (down > 0):
+            q = p - 12 if up > 0 else p + 12
+            if _playable(q) and abs(q - before) <= SLIP and abs(q - after) <= SLIP:
+                line[i] = replace(line[i], pitch=q)
 
 
 def _playable(pitch: int) -> bool:

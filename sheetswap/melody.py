@@ -269,21 +269,33 @@ def projected_line(notes: list[Note]) -> list[Note] | None:
             loud.append(i)
     if len(loud) < max(VOICING_MIN, VOICING_SHARE * len(ns)):
         return None
-    top = 0
+    on_top = []
     for i in loud:
         lo = np.searchsorted(s, s[i] - SAME_ONSET)
         hi = np.searchsorted(s, s[i] + SAME_ONSET)
-        top += p[i] >= p[lo:hi].max()
-    if top / len(loud) < VOICING_TOP:
+        if p[i] >= p[lo:hi].max():
+            on_top.append(i)
+    if len(on_top) < VOICING_TOP * len(loud):
         return None
     line: list[Note] = []
-    for i in loud:
+    for i in on_top:                 # an accented bass note under the tune isn't the tune
         n = ns[i]
         if line and n.start - line[-1].start < SAME_ONSET:
             if n.pitch > line[-1].pitch:
                 line[-1] = Note(n.pitch, n.start, n.end, n.velocity)
             continue
         line.append(Note(n.pitch, n.start, n.end, n.velocity))
+    # a bass note struck alone can also be loud and "on top": drop notes more
+    # than an octave under the tune's own register around them
+    ls = np.array([n.start for n in line])
+    lp = np.array([n.pitch for n in line])
+    keep = []
+    for n in line:
+        lo = np.searchsorted(ls, n.start - REF_SPAN)
+        hi = np.searchsorted(ls, n.start + REF_SPAN)
+        if n.pitch >= np.median(lp[lo:hi]) - 12:
+            keep.append(n)
+    line = keep
     for a, b in zip(line, line[1:]):
         a.end = min(a.end, b.start)
     span = max(ns[-1].end - ns[0].start, 1e-6)
@@ -292,9 +304,42 @@ def projected_line(notes: list[Note]) -> list[Note] | None:
     return line
 
 
+FILL_GAP = (1.0, 4.0)   # s: gaps inside a voiced tune this long are filled from the top line
+FILL_LOUDER = 4         # velocity over the median of the notes around, for a fill note
+FILL_RANGE = 7          # semitones under the lower of the two tune notes around the gap
+
+
 def piano_melody(notes: list[Note]) -> list[Note]:
-    """The tune of a piano part: the pianist's voicing if clear, else top_voice."""
-    return projected_line(notes) or top_voice(notes)
+    """The tune of a piano part: the pianist's voicing if clear, else top_voice.
+
+    A pianist doesn't voice every tune note equally: softer stretches drop out
+    of projected_line and would read as rests. Gaps of FILL_GAP inside the tune
+    are filled with top-line notes that still stand out a little and stay near
+    the tune's register; longer gaps (interludes, a chords-only intro) stay rests.
+    """
+    line = projected_line(notes)
+    if not line:
+        return top_voice(notes)
+    top = top_voice(notes)
+    starts = np.array([n.start for n in notes])
+    vels = np.array([n.velocity for n in notes], dtype=float)
+    out = list(line)
+    for a, b in zip(line, line[1:]):
+        gap = b.start - a.start
+        if not FILL_GAP[0] <= gap <= FILL_GAP[1]:
+            continue
+        lo = np.searchsorted(starts, a.start)
+        hi = np.searchsorted(starts, b.start)
+        around = float(np.median(vels[lo:hi])) if hi > lo else 0.0
+        floor = min(a.pitch, b.pitch) - FILL_RANGE
+        for n in top:
+            if (a.start + SAME_ONSET < n.start < b.start - SAME_ONSET and n.pitch >= floor
+                    and n.velocity >= around + FILL_LOUDER):
+                out.append(Note(n.pitch, n.start, n.end, n.velocity))
+    out.sort(key=lambda n: n.start)
+    for x, y in zip(out, out[1:]):
+        x.end = min(x.end, y.start)
+    return [n for n in out if n.end > n.start]
 
 
 def clean_monophonic(notes: list[Note]) -> list[Note]:

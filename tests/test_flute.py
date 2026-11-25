@@ -103,3 +103,14 @@ def test_key_after_shift():
     assert key_after_shift(3, 0) == 3
     assert key_after_shift(7, 0) == -5      # C-sharp respelled as D-flat
     assert key_after_shift(-3, 12) == -3
+
+
+def test_octave_slip_is_fixed_but_real_leaps_stay():
+    def line(pitches):
+        return [QNote(p, 12 * i, 12) for i, p in enumerate(pitches)]
+    out, _ = fit_to_flute(line([76, 77, 64, 76, 74]))        # E5 F5 E4 E5 D5: E4 is a slip
+    assert [n.pitch for n in out] == [76, 77, 76, 76, 74]
+    out, _ = fit_to_flute(line([72, 84, 83, 79, 77]))        # C5 C6 B5: a real octave leap
+    assert [n.pitch for n in out] == [72, 84, 83, 79, 77]
+    out, _ = fit_to_flute(line([79, 67, 79]))                # G5 G4 G5 (first/last untouched)
+    assert [n.pitch for n in out][1] == 79
