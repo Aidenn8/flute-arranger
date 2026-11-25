@@ -6,6 +6,8 @@ clean_monophonic tidies a line that is already one voice (the vocal stem).
 """
 from __future__ import annotations
 
+from bisect import bisect_right
+
 import numpy as np
 
 from .model import Note
@@ -316,30 +318,182 @@ def piano_melody(notes: list[Note]) -> list[Note]:
     of projected_line and would read as rests. Gaps of FILL_GAP inside the tune
     are filled with top-line notes that still stand out a little and stay near
     the tune's register; longer gaps (interludes, a chords-only intro) stay rests.
+    Gaps up to FIGURE_GAP also get the tune hand's figures (_figure_notes), and
+    tune notes are held while their key is struck again (_hold_restruck).
     """
     line = projected_line(notes)
     if not line:
         return top_voice(notes)
     top = top_voice(notes)
-    starts = np.array([n.start for n in notes])
-    vels = np.array([n.velocity for n in notes], dtype=float)
+    ns = sorted(notes, key=lambda n: n.start)
+    starts = np.array([n.start for n in ns])
+    vels = np.array([n.velocity for n in ns], dtype=float)
     out = list(line)
-    for a, b in zip(line, line[1:]):
+    for k, (a, b) in enumerate(zip(line, line[1:])):
         gap = b.start - a.start
-        if not FILL_GAP[0] <= gap <= FILL_GAP[1]:
+        if not FILL_GAP[0] <= gap <= FIGURE_GAP:
             continue
         lo = np.searchsorted(starts, a.start)
         hi = np.searchsorted(starts, b.start)
+        pace = float(np.median(np.diff([n.start for n in line[max(0, k - 3):k + 1]]))) if k else np.inf
+        register = np.median([n.pitch for n in line
+                              if a.start - REF_SPAN <= n.start <= b.start + REF_SPAN])
+        out += _figure_notes(ns[lo:hi], a, b, pace, max(min(a.pitch, b.pitch), register))
+        if gap > FILL_GAP[1]:
+            continue
         around = float(np.median(vels[lo:hi])) if hi > lo else 0.0
         floor = min(a.pitch, b.pitch) - FILL_RANGE
         for n in top:
             if (a.start + SAME_ONSET < n.start < b.start - SAME_ONSET and n.pitch >= floor
                     and n.velocity >= around + FILL_LOUDER):
                 out.append(Note(n.pitch, n.start, n.end, n.velocity))
-    out.sort(key=lambda n: n.start)
-    for x, y in zip(out, out[1:]):
+    seen: set[tuple[int, float]] = set()
+    uniq = []
+    for n in sorted(out, key=lambda n: n.start):
+        if (n.pitch, round(n.start, 3)) not in seen:
+            seen.add((n.pitch, round(n.start, 3)))
+            uniq.append(n)
+    _hold_restruck(uniq, ns)
+    for x, y in zip(uniq, uniq[1:]):
         x.end = min(x.end, y.start)
-    return [n for n in out if n.end > n.start]
+    return [n for n in uniq if n.end > n.start]
+
+
+FIGURE_GAP = 8.0      # s: longest gap in the voiced tune that figures are looked for in
+FIGURE_RANGE = 15     # semitones under the tune's register around a gap: still the tune's hand
+FIGURE_MIN = 0.03     # s, shortest figure note
+FIGURE_SOFT = 15      # velocity: notes struck this much softer than the loudest with them don't count
+FIGURE_RUN = 3        # figure notes come in runs of at least this many, ...
+FIGURE_PACE = 1.5     # ... no more than this many times faster than the tune just before
+
+
+def _overtones(ns: list[Note]) -> set[int]:
+    """Indexes (into ns, sorted) of notes an octave or two over a louder note
+    struck with them: the piano model hearing that note's overtone."""
+    out = set()
+    for i, n in enumerate(ns):
+        for j in range(i - 1, -1, -1):
+            if n.start - ns[j].start >= SAME_ONSET:
+                break
+            if (n.pitch - ns[j].pitch) in (12, 24) and ns[j].velocity > n.velocity:
+                out.add(i)
+        for j in range(i + 1, len(ns)):
+            if ns[j].start - n.start >= SAME_ONSET:
+                break
+            if (n.pitch - ns[j].pitch) in (12, 24) and ns[j].velocity > n.velocity:
+                out.add(i)
+    return out
+
+
+def _figure_notes(ns: list[Note], a: Note, b: Note, pace: float, tune: float) -> list[Note]:
+    """Notes the tune's hand plays one at a time between tune notes a and b
+    (`ns`, sorted): the broken chords and runs between phrases (Für Elise's
+    A-C-E-A), part of the line a flutist plays.
+
+    Such a note is the only one struck at its moment in the tune's register
+    (at most FIGURE_RANGE under `tune`, the higher of the lower tune note
+    around the gap and the tune's median pitch around it, which keeps the
+    bass hand's figures out; notes struck together are chords;
+    overtones the model heard and much softer notes don't count), while the
+    tune note a no longer sounds: accompaniment moving under a held tune
+    note, as in a nocturne, is not the tune (a legato overlap as in
+    top_voice is allowed). The same key struck again just as a ends is a, held.
+    A figure carries on the tune's motion: at least FIGURE_RUN notes, at
+    most FIGURE_PACE times faster than the tune's last notes (`pace`, s
+    between onsets); faster notes after a held tune note are accompaniment
+    (Debussy's arpeggios under Clair de lune's long notes).
+    """
+    floor = tune - FIGURE_RANGE
+    held_until = a.end - min(OVERLAP * (a.end - a.start), OVERLAP_MAX)
+    ghost = _overtones(ns)
+    out: list[Note] = []
+    i = 0
+    while i < len(ns):
+        j = i + 1
+        while j < len(ns) and ns[j].start - ns[i].start < SAME_ONSET:
+            j += 1
+        group = [ns[k] for k in range(i, j) if k not in ghost and ns[k].pitch >= floor]
+        t = ns[i].start
+        i = j
+        if not group or not max(a.start + SAME_ONSET, held_until) < t < b.start - SAME_ONSET:
+            continue
+        loudest = max(n.velocity for n in group)
+        group = [n for n in group if n.velocity > loudest - FIGURE_SOFT]
+        top = max(group, key=lambda n: n.pitch)
+        if (len(group) > 1 or top.end - top.start < FIGURE_MIN
+                or (top.pitch == a.pitch and top.start <= a.end + RESTRIKE_GAP)):
+            continue
+        out.append(Note(top.pitch, top.start, top.end, top.velocity))
+    if len(out) < FIGURE_RUN:
+        return []
+    if pace > FIGURE_PACE * float(np.median(np.diff([a.start] + [n.start for n in out]))):
+        return []
+    return out
+
+
+RESTRIKE_GAP = 0.5    # s: the same key struck again this soon after a tune note ends continues it
+
+
+def _hold_restruck(line: list[Note], ns: list[Note]) -> None:
+    """Hold tune notes (in place) while the same key is struck again under
+    them before the next tune note (`ns`: all notes, sorted): Satie's F#4
+    lasts four bars while each bar's chord strikes F#4 again, which ends the
+    transcribed note (with the pedal down it sounds on)."""
+    by_pitch: dict[int, list[Note]] = {}
+    for n in ns:
+        by_pitch.setdefault(n.pitch, []).append(n)
+    starts = {p: [n.start for n in v] for p, v in by_pitch.items()}
+    for k, a in enumerate(line):
+        limit = line[k + 1].start if k + 1 < len(line) else float("inf")
+        same = by_pitch.get(a.pitch, [])
+        end = a.end
+        for n in same[bisect_right(starts.get(a.pitch, []), a.start + SAME_ONSET):]:
+            if n.start >= limit - SAME_ONSET or n.start > end + RESTRIKE_GAP:
+                break
+            end = max(end, n.end)
+        a.end = min(end, limit)
+
+
+JOIN_GAP = 0.02       # s: a same-pitch note starting this soon after the last one ended ...
+JOIN_BEATS = 1 / 3    # ... and less than this many beats after it started continues it ...
+STRUCK_TOL = 0.05     # ... unless the piano model heard that key struck within this many s
+
+
+def join_split_notes(line: list[Note], to_beats, struck: list[Note] = ()) -> list[Note]:
+    """Rejoin held notes that the general transcription model split.
+
+    On a bowed or blown note the model often hears one held note as two or
+    three same-pitch notes back to back (the bow changes pressure, the
+    vibrato swells). A real repeated note needs a new attack, and a tune
+    rarely repeats a note faster than a third of a beat; so a note of the
+    same pitch starting within JOIN_GAP of the previous one's end and less
+    than JOIN_BEATS (`to_beats`: seconds -> beats) after its start is the
+    same note, unless a note of `struck` (the piano model's notes: it hears
+    attacks, a piano's or a sharp bow stroke) starts with it, which makes it
+    a real repeated note. Piano transcription hears every key strike, so
+    this is not used on piano lines. Returns new Note objects.
+    """
+    attacks: dict[int, list[float]] = {}
+    for n in struck:
+        attacks.setdefault(n.pitch, []).append(n.start)
+    for v in attacks.values():
+        v.sort()
+
+    def attacked(n: Note) -> bool:
+        ts = attacks.get(n.pitch, [])
+        i = bisect_right(ts, n.start - STRUCK_TOL)
+        return i < len(ts) and ts[i] <= n.start + STRUCK_TOL
+
+    out: list[Note] = []
+    for n in sorted(line, key=lambda n: n.start):
+        prev = out[-1] if out else None
+        if (prev is not None and prev.pitch == n.pitch and n.start - prev.end < JOIN_GAP
+                and to_beats(n.start) - to_beats(prev.start) < JOIN_BEATS and not attacked(n)):
+            prev.end = max(prev.end, n.end)
+            prev.velocity = max(prev.velocity, n.velocity)
+            continue
+        out.append(Note(n.pitch, n.start, n.end, n.velocity))
+    return out
 
 
 def clean_monophonic(notes: list[Note]) -> list[Note]:

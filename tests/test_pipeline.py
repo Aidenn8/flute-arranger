@@ -165,6 +165,19 @@ def test_unheard_notes_and_cover():
     assert pipeline.other_instrument_cover(general + violin, piano, 10.0) > pipeline.ENSEMBLE_COVER
 
 
+def test_split_held_notes_rejoined_for_other_instruments_only():
+    # a violin's held quarter notes heard as two pieces each (0.5 s beats); a piano's
+    # quick repeated notes are real key strikes
+    split = [n for i in range(8) for n in (Note(76 + i % 3, i * 0.5, i * 0.5 + 0.1, 80),
+                                           Note(76 + i % 3, i * 0.5 + 0.1, i * 0.5 + 0.45, 70))]
+    notes, used, _ = pipeline.pick_melody(_analysis({"other": split}), "other")
+    assert used == "other"
+    assert [(n.pitch, n.start, n.end) for n in notes] == [
+        (76 + i % 3, i * 0.5, i * 0.5 + 0.45) for i in range(8)]
+    notes, used, _ = pipeline.pick_melody(_analysis({"piano": split}), "piano")
+    assert used == "piano" and len(notes) == 16
+
+
 def test_ensemble_takes_tune_from_other_instrument():
     piano = [Note(48 + (i % 3) * 4, i * 0.5, i * 0.5 + 0.45) for i in range(14)]
     other = [Note(79, i * 0.5, i * 0.5 + 0.45) for i in range(14)]

@@ -1,7 +1,7 @@
 import numpy as np
 
 from sheetswap.model import BeatGrid, Note, QNote
-from sheetswap.rhythm import add_breath_marks, quantize_line, snap
+from sheetswap.rhythm import add_breath_marks, quantize_line, snap, uses_triplets
 
 
 def _steady(period=0.5, n=40, start=0.0, bpb=4, first=0):
@@ -294,3 +294,69 @@ def test_breath_marks_compound_and_short_bars():
     assert [n.end for n in out if n.breath_after] == [72, 144, 216]
     out = add_breath_marks(_line([12] * 32), 2)         # 16 bars of 2/4
     assert [n.end for n in out if n.breath_after] == [96, 192, 288]
+
+
+# ---------------------------------------------------------------- reading the piece's rhythm
+
+TICK = 0.5 / 12       # seconds per tick at 0.5 s a quarter beat (_steady)
+
+
+def _at(ticks, pitch=72, length=5):
+    """Notes starting at the given tick positions (floats), `length` ticks long."""
+    return [Note(pitch + i % 5, t * TICK, (t + length) * TICK, 80) for i, t in enumerate(ticks)]
+
+
+def test_wavering_eighths_stay_eighths_in_a_piece_of_eighths():
+    # a minuet's plain 8ths, played up to 2 ticks (1/6 beat) early or late: still 8ths,
+    # not 8th + 16th figures
+    wobble = [0, 2, -1.5, 1.8, -2, 1, 0, -1.8, 1.5, 2, -1, 0]
+    ticks = [6 * i + wobble[i % len(wobble)] for i in range(48)]
+    q = quantize_line(_at(ticks), _steady(0.5, n=40))
+    assert [n.start for n in q] == [6 * i for i in range(48)]
+
+
+def test_sixteenth_runs_read_as_sixteenths():
+    ticks = [3 * i + float(np.sin(0.7 * i)) for i in range(64)]      # up to a tick early or late
+    q = quantize_line(_at(ticks, length=2.5), _steady(0.5, n=40))
+    assert [n.start for n in q] == [3 * i for i in range(64)]
+
+
+def test_uneven_sixteenths_are_not_read_as_triplets():
+    # 16ths and 8ths; two beats hold notes that happen to sit near a triplet's places
+    ticks = []
+    for beat in range(30):
+        b = 12 * beat
+        if beat in (5, 22):
+            ticks += [b, b + 4.2, b + 7.8]          # meant as 16th, 16th, 8th (0, 3, 6)
+        elif beat % 2:
+            ticks += [b, b + 3, b + 6, b + 9]
+        else:
+            ticks += [b, b + 6]
+    q = quantize_line(_at(ticks, length=2.5), _steady(0.5, n=40))
+    assert len(q) == len(ticks)
+    assert all(n.start % 3 == 0 for n in q)
+
+
+def test_uses_triplets():
+    trip = [12 * b + p for b in range(16) for p in (0, 4, 8)]
+    six = [12 * b + p for b in range(16) for p in (0, 3, 6, 9)]
+    assert uses_triplets(trip, 12)
+    assert not uses_triplets(six, 12)
+    assert not uses_triplets([x + 0.9 * (i % 2) for i, x in enumerate(six)], 12)
+    assert not uses_triplets(trip, 18)        # dotted beats split in three are plain 8ths
+
+
+def test_short_notes_played_just_before_the_beat_land_on_it():
+    # pairs of 8ths whose downbeat note comes 2 ticks early every time
+    ticks = [t for b in range(1, 17) for t in (12 * b - 2, 12 * b + 6)]
+    q = quantize_line(_at(ticks, length=4), _steady(0.5, n=40))
+    assert [n.start for n in q] == [t for b in range(1, 17) for t in (12 * b, 12 * b + 6)]
+
+
+def test_a_sung_scoop_into_a_note_is_left_out():
+    # quarter notes; the one on beat 2 is sung with a short scoop up from below
+    notes = [Note(70 + b % 3, 12 * b * TICK, (12 * b + 11) * TICK) for b in range(40) if b != 2]
+    notes += [Note(67, 22.9 * TICK, 24.6 * TICK), Note(72, 24.6 * TICK, 35 * TICK)]
+    q = quantize_line(notes, _steady(0.5, n=50))
+    assert [(n.pitch, n.start) for n in q][1:4] == [(71, 12), (72, 24), (70, 36)]
+    assert len(q) == 40

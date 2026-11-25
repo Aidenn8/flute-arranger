@@ -161,12 +161,14 @@ def other_instrument_cover(general: list[Note], piano: list[Note], duration: flo
 
 
 def find_beats(mono: Path, stems: dict, kind: str, sources: dict) -> BeatGrid:
-    """Beats and bars: the Beat This! network, or the older librosa tracker if it fails."""
+    """Beats and bars: the Beat This! network, or the older librosa tracker if it fails.
+
+    The transcribed notes (all parts) help the network choose 3 or 4 beats a bar."""
     import logging
     from .beats import track_beats
     try:
         from .neural_beats import track_beats_neural
-        return track_beats_neural(mono)
+        return track_beats_neural(mono, notes=[n for ns in sources.values() for n in ns])
     except Exception as e:                       # no model download, a torch problem, ...
         logging.getLogger(__name__).warning("neural beat tracking failed (%s); using librosa", e)
     drums = stems.get("drums") if kind in ("song", "band") else None
@@ -192,14 +194,20 @@ def _coverage(notes: list[Note]) -> float:
     return sum(n.end - n.start for n in notes)
 
 
-def _as_melody(name: str, notes: list[Note]) -> list[Note]:
-    from .melody import top_voice, piano_melody
+def _as_melody(name: str, notes: list[Note], grid: BeatGrid | None = None,
+               struck: list[Note] = ()) -> list[Note]:
+    from .melody import join_split_notes, top_voice, piano_melody
     if name == "vocals":
         # already one clean line; merging touching same-pitch notes would undo re-sung notes
         return sorted(notes, key=lambda n: n.start)
     if name in ("piano", "midi_all"):
         return piano_melody(notes)
-    return top_voice(notes)
+    line = top_voice(notes)
+    if name == "other" and grid is not None:
+        # the general model splits held bowed/blown notes; rejoin them, except
+        # where the piano model (`struck`) heard a new attack
+        line = join_split_notes(line, grid.to_beats, struck)
+    return line
 
 
 def pick_melody(an: Analysis, source: str) -> tuple[list[Note], str, list[str]]:
@@ -217,7 +225,7 @@ def pick_melody(an: Analysis, source: str) -> tuple[list[Note], str, list[str]]:
                 if name != order[source][0]:
                     warnings.append(f"This song has no separate '{source}' part, "
                                     "so the tune was taken from another part.")
-                return _as_melody(name, s[name]), name, warnings
+                return _as_melody(name, s[name], an.grid, s.get("piano") or []), name, warnings
         warnings.append(f"Couldn't find a '{source}' part; picked the tune automatically instead.")
 
     vocals = s.get("vocals") or []
@@ -229,7 +237,7 @@ def pick_melody(an: Analysis, source: str) -> tuple[list[Note], str, list[str]]:
     order = ("other", "piano", "midi_all") if an.kind == "ensemble" else ("piano", "other", "midi_all")
     for name in order:
         if s.get(name):
-            return _as_melody(name, s[name]), name, warnings
+            return _as_melody(name, s[name], an.grid, s.get("piano") or []), name, warnings
     return [], "", warnings + ["No notes were found in this file."]
 
 

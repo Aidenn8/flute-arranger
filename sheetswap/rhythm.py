@@ -8,23 +8,59 @@ The beat is grid.beat_ticks long: a quarter (12), a dotted quarter (18, in
 16ths or 8th triplets; a dotted beat into three 8ths or six 16ths (no
 triplets: three even notes in a dotted beat are plain 8ths); an eighth beat
 into two 16ths.
+
+Onsets are read a beat at a time as rhythm patterns (the places where notes
+start in the beat), the way a musician reads them: the likeliest pattern
+given how far each onset is from it and how common the pattern is. How
+common is learned from the piece itself, on top of the usual vocabulary of
+printed music (VOCAB), so a minuet in 8ths keeps its 8ths where the playing
+wavers, and a piece in 16th runs reads its 16ths.
 """
 from __future__ import annotations
 
 import math
+from collections import Counter
 from dataclasses import replace
+from itertools import combinations
+from statistics import median
 
 from .model import DOTTED_BEAT, EIGHTH_BEAT, QUARTER_BEAT, BeatGrid, Note, QNote
 
 SIXTEENTH = 3
 TRIPLET = 4
 EIGHTH = 6
-TRIPLET_GAIN = 0.4   # triplets must cut a beat's snapping error by more than this
-EIGHTH_TOL = 1.25    # ticks: a beat is written in 8ths if every onset is this close to one
 QUARTER = QUARTER_BEAT
-LONG_NOTE = 0.75     # of a beat: a beat's only note this long snaps to the beat...
-LEAN = 0.25          # ...when it starts within this share of a beat of it (a 16th in 4/4)
-ANTICIPATE = 0.125   # of a beat: a long note starting this little before a beat belongs to it
+
+# How common each beat pattern (onset places, ticks from the beat) is in
+# printed music, as pseudo-counts; any other pattern on the beat's grid
+# counts RARE. A quarter beat: held, a quarter, two 8ths, an 8th after an 8th
+# rest or tie, four 16ths, 8th + two 16ths, two 16ths + 8th, dotted 8th +
+# 16th, 16th rest + three 16ths, 16th + dotted 8th, a triplet, quarter + 8th
+# of a triplet.
+VOCAB = {
+    QUARTER_BEAT: {(): 4, (0,): 8, (0, 6): 6, (6,): 1, (0, 3, 6, 9): 4, (0, 6, 9): 2,
+                   (0, 3, 6): 2, (0, 9): 1.5, (3, 6, 9): 0.5, (0, 3): 0.3, (0, 4, 8): 1,
+                   (0, 8): 0.2},
+    # a dotted beat: held, dotted quarter, three 8ths, quarter + 8th, 8th +
+    # quarter, siciliano (dotted 8th, 16th, 8th), six 16ths, 8ths mixed with 16ths
+    DOTTED_BEAT: {(): 4, (0,): 8, (0, 6, 12): 6, (0, 12): 3, (0, 6): 1, (6,): 0.5,
+                  (6, 12): 0.5, (12,): 0.3, (0, 9, 12): 1, (0, 3, 6, 9, 12, 15): 3,
+                  (0, 6, 12, 15): 0.5, (0, 3, 6, 12): 0.5, (0, 6, 9, 12): 0.5,
+                  (0, 6, 9, 12, 15): 0.3, (0, 3, 6, 9, 12): 0.3},
+    # an eighth beat (3/8 in three): held, an 8th, two 16ths, 16th rest + 16th
+    EIGHTH_BEAT: {(): 4, (0,): 8, (0, 3): 4, (3,): 0.5},
+}
+RARE = 0.05
+PRIOR_BEATS = 24     # the vocabulary weighs as much as this many of the piece's own beats
+ROUNDS = 4           # times the piece's own pattern counts are learned again
+SPREAD = (0.8, 1.25, 2.5)   # ticks: timing spread of the playing (least, first guess, most)
+DROP = 15.0          # cost of leaving an onset out (when a beat can't hold them all) ...
+GRACE_DROP = 5.0     # ... or of a grace note: under a 16th long, and under half as long as a note
+                     # starting less than a 16th from it
+MERGE = 1.5          # ticks: onsets closer than this are one note (the louder one stays)
+PUSH = 0.25          # of a beat: an onset this close before a beat may be its downbeat
+TRIPLET_CLEAR = 1.0  # ticks: a beat clearly in triplets has 3+ onsets this close to 0, 4, 8 ...
+TRIPLET_SHARE = 0.1  # ... and triplets are read only if this share of beats with 2+ onsets are
 # Gaps shorter than a beat are held through (a flute line is legato; a
 # pianist's lifted fingers are not rests).
 SHORT_BAR = 3        # felt beats: shorter bars (2/4, 6/8, 3/8) get breath windows of 4 bars
@@ -39,85 +75,252 @@ def _beat_of(ticks: float, unit: int = QUARTER) -> int:
     return math.floor(ticks / unit)
 
 
-def _note_beat(s: float, e: float, unit: int) -> int:
-    """The beat a note's onset is judged in: its own, or the next one for a
-    long note that starts just before it (ANTICIPATE)."""
-    b = _beat_of(s, unit)
-    if e - s >= LONG_NOTE * unit and (b + 1) * unit - s <= ANTICIPATE * unit:
-        b += 1
-    return b
+def uses_triplets(onsets: list[float], unit: int) -> bool:
+    """Whether a piece plays 8th triplets (onsets in ticks).
 
-
-def _half_beat(unit: int) -> int:
-    """The grid a long note falls back to when it is not on the beat."""
-    return SIXTEENTH if unit == EIGHTH_BEAT else EIGHTH
-
-
-def _beat_steps(notes: list[tuple[float, float]], unit: int = QUARTER) -> dict[int, int]:
-    """The coarsest grid each beat's onsets fit: 8ths, else 8th triplets
-    (quarter beats only), else 16ths.
-
-    Real playing (rubato, a late finger) lands between grid lines; always
-    snapping to 16ths turns that into fussy dotted-16th rhythms, so a beat
-    only gets 16ths when its notes really are that fast. A beat holding one
-    long note (a singer or pianist leaning into it a little early or late)
-    puts it on the beat when it's that close (a dotted quarter in 6/8), and
-    on an 8th otherwise.
+    Played 16ths and 8ths waver enough to fit a triplet now and then about
+    as well as their own grid, so a beat only counts as clear evidence when
+    it holds three or more onsets, all within TRIPLET_CLEAR ticks of the
+    triplet grid with the 2nd and 3rd triplet 8ths both there, and that grid
+    fits at least twice as well as 16ths. The piece reads triplets when
+    TRIPLET_SHARE of its beats with two or more onsets are such beats (none
+    of the reference recordings without triplets has more than one).
     """
-    by_beat: dict[int, list[tuple[float, float]]] = {}
-    for s, e in notes:
-        by_beat.setdefault(_note_beat(s, e, unit), []).append((s, e))
-    steps = {}
-    for beat, se in by_beat.items():
-        ss = [s for s, _ in se]
-        if len(se) == 1 and se[0][1] - se[0][0] >= LONG_NOTE * unit:
-            s = ss[0]
-            steps[beat] = unit if abs(s - snap(s, unit)) <= LEAN * unit else _half_beat(unit)
-            continue
-        if unit == EIGHTH_BEAT:
-            continue                       # 16ths are the only split of an 8th beat
-        on8 = [snap(s, EIGHTH) for s in ss]
-        if max(abs(s - q) for s, q in zip(ss, on8)) <= EIGHTH_TOL and len(set(on8)) == len(on8):
-            steps[beat] = EIGHTH
-            continue
-        if len(ss) < 2 or unit != QUARTER:
-            continue
-        err16 = sum(abs(s - snap(s, SIXTEENTH)) for s in ss)
-        err3 = sum(abs(s - snap(s, TRIPLET)) for s in ss)
-        if err3 < (1 - TRIPLET_GAIN) * err16:
-            steps[beat] = TRIPLET
-    return steps
+    if unit != QUARTER_BEAT:
+        return False
+    by_beat: dict[int, list[float]] = {}
+    for x in onsets:
+        b = _beat_of(x, unit)
+        by_beat.setdefault(b, []).append(x - b * unit)
+    busy = [xs for xs in by_beat.values() if len(xs) >= 2]
+    clear = 0
+    for xs in busy:
+        on3 = [snap(x, TRIPLET) for x in xs]
+        err3 = sum(abs(x - q) for x, q in zip(xs, on3))
+        err16 = sum(abs(x - snap(x, SIXTEENTH)) for x in xs)
+        if (len(xs) >= 3 and {TRIPLET, 2 * TRIPLET} <= set(on3) and err3 < 0.5 * err16
+                and all(abs(x - q) <= TRIPLET_CLEAR for x, q in zip(xs, on3))):
+            clear += 1
+    return clear > 0 and clear >= TRIPLET_SHARE * len(busy)
+
+
+def _lattices(unit: int, simple: bool, triplets: bool) -> list[tuple[int, ...]]:
+    """The finest grids a beat is read on: 16ths (and 8th triplets in a
+    quarter beat of a piece that uses them); 8ths only when simple."""
+    lats = [tuple(range(0, unit, SIXTEENTH))]
+    if unit == QUARTER_BEAT and triplets:
+        lats.append((0, TRIPLET, 2 * TRIPLET))
+    if simple:
+        lats = [tuple(p for p in lats[0] if p % EIGHTH == 0)]
+    return lats
+
+
+def _vocabulary(unit: int, simple: bool, triplets: bool) -> dict[tuple[int, ...], float]:
+    """Every pattern a beat may hold, with its prior pseudo-count. Triplet
+    notes come at least two to a beat (a lone one would be a 16th's place
+    played unevenly)."""
+    known = VOCAB.get(unit, {})
+    pats: dict[tuple[int, ...], float] = {}
+    for k, lat in enumerate(_lattices(unit, simple, triplets)):
+        for r in range(2 if k else 0, len(lat) + 1):
+            for c in combinations(lat, r):
+                pats.setdefault(c, known.get(c, RARE))
+    return pats
+
+
+def _fit(xs: list[float], pat: tuple[int, ...]) -> tuple[float, list[int | None]]:
+    """Read onsets xs (ticks from the beat, in order) as pattern pat, leaving
+    out len(xs) - len(pat) of them the best way. Returns (squared timing
+    error, each onset's place or None if left out)."""
+    n, m = len(xs), len(pat)
+    if n == m:
+        return sum((x - p) ** 2 for x, p in zip(xs, pat)), list(pat)
+    inf = float("inf")
+    d = [[inf] * (m + 1) for _ in range(n + 1)]
+    d[0][0] = 0.0
+    for i in range(1, n + 1):
+        for j in range(max(0, m - n + i), min(i, m) + 1):
+            best = d[i - 1][j]                         # onset i left out
+            if j:
+                best = min(best, d[i - 1][j - 1] + (xs[i - 1] - pat[j - 1]) ** 2)
+            d[i][j] = best
+    places: list[int | None] = [None] * n
+    j = m
+    for i in range(n, 0, -1):
+        if j and d[i][j] == d[i - 1][j - 1] + (xs[i - 1] - pat[j - 1]) ** 2:
+            places[i - 1] = pat[j - 1]
+            j -= 1
+    return d[n][m], places
+
+
+def _options(xs: list[float], grace: list[bool], by_size: dict[int, list[tuple[int, ...]]],
+             most: int) -> list[tuple[tuple[int, ...], float, float, list[int | None]]]:
+    """Every way to read one beat's onsets xs (ticks from the beat, in order):
+    (pattern, squared timing error, cost of the onsets left out, places).
+    All onsets are read, or all but one (DROP; GRACE_DROP for a grace note,
+    `grace`), or, when the beat can't hold them all, the best `most`."""
+    n = len(xs)
+    if n > most:
+        out = []
+        for p in by_size[most]:
+            ssd, places = _fit(xs, p)
+            out.append((p, ssd, DROP * (n - most), places))
+        return out
+    out = [(p, sum((x - q) ** 2 for x, q in zip(xs, p)), 0.0, list(p))
+           for p in by_size.get(n, ())]
+    for j in range(n):
+        rest = xs[:j] + xs[j + 1:]
+        cost = GRACE_DROP if grace[j] else DROP
+        for p in by_size.get(n - 1, ()):
+            out.append((p, sum((x - q) ** 2 for x, q in zip(rest, p)), cost,
+                        list(p[:j]) + [None] + list(p[j:])))
+    return out
+
+
+def _read_rhythm(onsets: list[float], unit: int, simple: bool = False,
+                 grace: list[bool] | None = None
+                 ) -> tuple[list[int | None], dict[int, tuple[int, ...]]]:
+    """Each onset's tick (None = left out) and each beat's pattern.
+
+    The line is read a beat at a time: the pattern P and the onsets' places
+    in it that minimise
+        -log p(P) + sum (onset - place)^2 / (2 spread^2) + cost of onsets left out
+    (DROP, or GRACE_DROP for onsets flagged in `grace`). An onset within PUSH
+    of the next beat may instead be that beat's downbeat (a note leaned into
+    a little early), so the beats are read together, by dynamic programming
+    over that choice. p(P) is VOCAB, worth PRIOR_BEATS beats, plus the
+    patterns this piece was read as last round; the spread is the piece's
+    (robust) timing error from last round. A few rounds learn what the piece
+    uses: 8ths, 16th runs, triplets.
+    """
+    grace = grace or [False] * len(onsets)
+    vocab = _vocabulary(unit, simple, not simple and uses_triplets(onsets, unit))
+    by_size: dict[int, list[tuple[int, ...]]] = {}
+    for p in vocab:
+        by_size.setdefault(len(p), []).append(p)
+    most = max(by_size)
+    natural: dict[int, list[int]] = {}
+    for i, x in enumerate(onsets):
+        natural.setdefault(_beat_of(x, unit), []).append(i)
+    beats = sorted(set(natural) | {b + 1 for b in natural})
+
+    def near_next(idx: list[int], b: int) -> bool:
+        return bool(idx) and (b + 1) * unit - onsets[idx[-1]] <= PUSH * unit
+
+    # every way to read each beat: (an onset came in, its last goes out) -> (onsets, options)
+    table: dict[int, dict[tuple[bool, bool], tuple[list[int], list]]] = {}
+    for b in beats:
+        own, prev = natural.get(b, []), natural.get(b - 1, [])
+        table[b] = {}
+        for came in (False, True) if near_next(prev, b - 1) else (False,):
+            for goes in (False, True) if near_next(own, b) else (False,):
+                idx = ([prev[-1]] if came else []) + (own[:-1] if goes else own)
+                xs = [onsets[i] - b * unit for i in idx]
+                table[b][came, goes] = (idx, _options(xs, [grace[i] for i in idx], by_size, most))
+
+    def chosen(b: int, way: tuple[bool, bool, int]):
+        came, goes, k = way
+        idx, opts = table[b][came, goes]
+        return idx, opts[k]
+
+    counts: Counter = Counter()
+    spread = SPREAD[1]
+    prior = sum(vocab.values())
+    picks: dict[int, tuple[bool, bool, int]] = {}
+    for _ in range(ROUNDS):
+        seen = sum(counts.values())
+        cost_of = {p: -math.log((PRIOR_BEATS * c / prior + counts[p]) / (PRIOR_BEATS + seen))
+                   for p, c in vocab.items()}
+        var2 = 2 * spread ** 2
+        cost = {False: 0.0}                        # so far, by whether the last beat pushed out
+        back = []
+        for b in beats:
+            new: dict[bool, float] = {}
+            arg: dict[bool, tuple[bool, int]] = {}
+            for (came, goes), (_, opts) in table[b].items():
+                if came not in cost:
+                    continue
+                c, k = min((cost_of[p] + ssd / var2 + left_out, k)
+                           for k, (p, ssd, left_out, _) in enumerate(opts))
+                if goes not in new or cost[came] + c < new[goes]:
+                    new[goes], arg[goes] = cost[came] + c, (came, k)
+            back.append((b, arg))
+            cost = new
+        new_picks, goes = {}, False
+        for b, arg in reversed(back):
+            came, k = arg[goes]
+            new_picks[b] = (came, goes, k)
+            goes = came
+        if new_picks == picks:
+            break
+        picks = new_picks
+        counts = Counter(chosen(b, way)[1][0] for b, way in picks.items())
+        counts[()] = beats[-1] - beats[0] + 1 - sum(v for p, v in counts.items() if p)
+        devs = [abs(b * unit + pl - onsets[i]) for b, way in picks.items()
+                for i, pl in zip(chosen(b, way)[0], chosen(b, way)[1][3]) if pl is not None]
+        spread = min(max(1.4826 * median(devs), SPREAD[0]), SPREAD[2]) if devs else SPREAD[1]
+
+    ticks: list[int | None] = [None] * len(onsets)
+    patterns: dict[int, tuple[int, ...]] = {}
+    for b, way in picks.items():
+        idx, (pattern, _, _, places) = chosen(b, way)
+        patterns[b] = pattern
+        for i, pl in zip(idx, places):
+            if pl is not None:
+                ticks[i] = b * unit + pl
+    return ticks, patterns
+
+
+def _end_step(pattern: tuple[int, ...], unit: int, simple: bool) -> int:
+    """The grid a note's end snaps to in a beat read as `pattern`: the
+    pattern's own (16ths, triplets), else 8ths (16ths in an eighth beat)."""
+    if simple:
+        return EIGHTH
+    if any(p % TRIPLET == 0 and p % SIXTEENTH for p in pattern):
+        return TRIPLET
+    if any(p % EIGHTH for p in pattern) or unit == EIGHTH_BEAT:
+        return SIXTEENTH
+    return EIGHTH
 
 
 def quantize_line(notes: list[Note], grid: BeatGrid, simple: bool = False) -> list[QNote]:
     """Monophonic notes (seconds) -> sorted, non-overlapping QNotes (ticks).
 
-    Onsets snap per beat to 16ths or 8th triplets (simple: 8ths). Two notes
-    landing on the same tick keep the louder one. A note ends at its snapped
-    end; if that leaves less than the shortest note before the next onset it
-    is held to that onset instead.
+    Onsets are read as rhythm patterns (_read_rhythm): 16ths or 8th
+    triplets where the piece uses them, 8ths only when simple. Onsets closer
+    than MERGE keep the louder note; a note under half as long as one starting less
+    than a 16th from it may be left out as a grace note (a sung scoop, an
+    ornament) when that reads more simply. A note ends at its end snapped to
+    its beat's grid; if that leaves less than the shortest note before the
+    next onset it is held to that onset instead.
     """
     if not notes:
         return []
     unit = grid.beat_ticks
     min_dur = EIGHTH if simple else SIXTEENTH
-    default = EIGHTH if simple else SIXTEENTH
 
     raw = sorted(
         ((grid.to_ticks(n.start), grid.to_ticks(max(n.end, n.start)), n) for n in notes),
         key=lambda x: (x[0], -x[2].velocity),
     )
-    steps = {} if simple else _beat_steps([(s, e) for s, e, _ in raw], unit)
+    merged: list[tuple[float, float, Note]] = []
+    for s, e, n in raw:
+        if merged and s - merged[-1][0] < MERGE:
+            if (n.velocity, n.dur) > (merged[-1][2].velocity, merged[-1][2].dur):
+                merged[-1] = (s, e, n)
+            continue
+        merged.append((s, e, n))
+    grace = [e - s < SIXTEENTH and any(0 <= j < len(merged) and abs(merged[j][0] - s) < SIXTEENTH
+                                       and merged[j][2].dur > 2 * n.dur for j in (i - 1, i + 1))
+             for i, (s, e, n) in enumerate(merged)]
+    ticks, patterns = _read_rhythm([s for s, _, _ in merged], unit, simple, grace)
 
     def step_at(t: float) -> int:
-        return steps.get(_beat_of(t, unit), default)
+        return _end_step(patterns.get(_beat_of(t, unit), ()), unit, simple)
 
-    # snap onsets; on a collision keep the louder note (then the longer one)
     kept: dict[int, tuple[float, Note]] = {}
-    for s, e, n in raw:
-        st = snap(s, steps.get(_note_beat(s, e, unit), default))
-        old = kept.get(st)
-        if old is None or (n.velocity, n.dur) > (old[1].velocity, old[1].dur):
+    for (s, e, n), st in zip(merged, ticks):
+        if st is not None:
             kept[st] = (e, n)
     starts = sorted(kept)
 
