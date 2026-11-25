@@ -196,3 +196,18 @@ def test_no_breath_marks_in_short_or_rested_phrases():
 
 def test_breath_marks_empty():
     assert add_breath_marks([], 4) == []
+
+
+def test_long_note_leaned_into_lands_on_the_beat():
+    g = _steady(0.5)
+    # a held note sung a 16th early (0.125 beat) before beat 2, then one a 16th late on beat 4
+    notes = [Note(72, 0.0, 0.45), Note(74, 0.4375, 1.4), Note(76, 1.53, 2.4)]
+    q = quantize_line(notes, g)
+    assert [n.start for n in q] == [0, 12, 36]
+
+
+def test_dotted_rhythm_with_two_notes_in_a_beat_is_kept():
+    g = _steady(0.5)
+    notes = [Note(72, 0.0, 0.37), Note(74, 0.375, 0.5), Note(76, 0.5, 1.0)]   # dotted 8th + 16th
+    q = quantize_line(notes, g)
+    assert [(n.start, n.dur) for n in q][:2] == [(0, 9), (9, 3)]

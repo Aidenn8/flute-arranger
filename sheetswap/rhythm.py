@@ -16,6 +16,8 @@ TRIPLET = 4
 EIGHTH = 6
 TRIPLET_GAIN = 0.4   # triplets must cut a beat's snapping error by more than this
 EIGHTH_TOL = 1.25    # ticks: a beat is written in 8ths if every onset is this close to one
+QUARTER = TICKS_PER_BEAT
+LONG_NOTE = 9        # ticks (3/4 of a beat): a beat's only note this long snaps to the beat
 LEGATO_GAP = TICKS_PER_BEAT  # gaps shorter than a beat are held through (a flute line is
                              # legato; a pianist's lifted fingers are not rests)
 
@@ -29,18 +31,25 @@ def _beat_of(ticks: float) -> int:
     return math.floor(ticks / TICKS_PER_BEAT)
 
 
-def _beat_steps(starts: list[float]) -> dict[int, int]:
+def _beat_steps(notes: list[tuple[float, float]]) -> dict[int, int]:
     """The coarsest grid each beat's onsets fit: 8ths, else 8th triplets, else 16ths.
 
     Real playing (rubato, a late finger) lands between grid lines; always
     snapping to 16ths turns that into fussy dotted-16th rhythms, so a beat
-    only gets 16ths when its notes really are that fast.
+    only gets 16ths when its notes really are that fast. A beat holding one
+    long note (a singer or pianist leaning into it a 16th early or late) puts
+    it on the beat when it's that close, and on an 8th otherwise.
     """
-    by_beat: dict[int, list[float]] = {}
-    for s in starts:
-        by_beat.setdefault(_beat_of(s), []).append(s)
+    by_beat: dict[int, list[tuple[float, float]]] = {}
+    for s, e in notes:
+        by_beat.setdefault(_beat_of(s), []).append((s, e))
     steps = {}
-    for beat, ss in by_beat.items():
+    for beat, se in by_beat.items():
+        ss = [s for s, _ in se]
+        if len(se) == 1 and se[0][1] - se[0][0] >= LONG_NOTE:
+            s = ss[0]
+            steps[beat] = QUARTER if abs(s - snap(s, QUARTER)) <= SIXTEENTH else EIGHTH
+            continue
         on8 = [snap(s, EIGHTH) for s in ss]
         if max(abs(s - q) for s, q in zip(ss, on8)) <= EIGHTH_TOL and len(set(on8)) == len(on8):
             steps[beat] = EIGHTH
@@ -71,7 +80,7 @@ def quantize_line(notes: list[Note], grid: BeatGrid, simple: bool = False) -> li
         ((grid.to_ticks(n.start), grid.to_ticks(max(n.end, n.start)), n) for n in notes),
         key=lambda x: (x[0], -x[2].velocity),
     )
-    steps = {} if simple else _beat_steps([s for s, _, _ in raw])
+    steps = {} if simple else _beat_steps([(s, e) for s, e, _ in raw])
 
     def step_at(t: float) -> int:
         return steps.get(_beat_of(t), default)
