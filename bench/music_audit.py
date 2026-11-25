@@ -184,18 +184,9 @@ def bench_tune(piece: str) -> dict:
 # ---------------------------------------------------------------- shared helpers
 
 def arrange_grid(an: Analysis, opts: ArrangeOptions) -> BeatGrid:
-    """The beat grid pipeline.arrange uses for these options (same steps, same order)."""
-    grid = pipeline.rescale_tempo(an.grid, opts.tempo)
-    bpb = opts.meter if opts.meter in (3, 4) else grid.beats_per_bar
-    if bpb != grid.beats_per_bar or opts.barshift:
-        first = grid.first_downbeat + opts.barshift % bpb
-        starts = [n.start for ns in an.sources.values() for n in ns]
-        if starts:
-            first_note_beat = int(np.floor(grid.to_beats(min(starts)))) + grid.first_downbeat
-            while first - bpb >= first_note_beat:
-                first -= bpb
-        grid = BeatGrid(grid.beats, bpb, first)
-    return grid
+    """The beat grid pipeline.arrange uses for these options (the same function)."""
+    melody, _, _ = pipeline.pick_melody(an, opts.melody_source)
+    return pipeline.bar_grid(an, opts, melody)
 
 
 class Where:

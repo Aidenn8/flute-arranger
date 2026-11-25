@@ -109,7 +109,10 @@ def test_chromatic_notes_spelled_by_direction():
 
 def test_spelling_follows_key():
     assert spell(66, 2, "major").name == "F#"
-    assert spell(70, 2, "major").name == "A#"
+    assert spell(70, 2, "major").name == "B-"        # b6, borrowed from D minor (no context)
+    assert spell(63, 0, "minor").name == "D#"        # A minor: #4, leading tone to E
+    assert spell(66, 0, "minor").name == "F#"        # A minor: raised 6th
+    assert spell(70, 0, "major").name == "B-"        # C major: b7
     assert spell(65, 6, "major").name == "E#"        # F# major
     assert spell(71, -6, "major").name == "C-"       # G-flat major
     assert spell(71, -6, "major").midi == 71

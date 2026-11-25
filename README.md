@@ -12,6 +12,16 @@ You give it a recording (mp3, wav, m4a, flac, ogg, opus, aiff) or a MIDI file. I
 
 Then open <http://localhost:5230>. Upload a song, pick what's in it, and wait a few minutes the first time (it has to listen through the whole song). After that, changing any option takes a few seconds.
 
+### Or let it listen to your Mac
+
+Under **Listen to this computer** on the start page: press **Start listening**, play the song on your Mac (Spotify, YouTube, anything; headphones are fine), then press **Stop and make the sheet music**. Quiet before and after the song is cut off, and from there it's the same as an upload. It stops by itself after 12 minutes.
+
+The first time, macOS has to allow it (it counts listening to the computer's sound as screen recording):
+
+1. Build the small recorder once: `scripts/build_sysaudio.sh` (uses the Swift compiler from Xcode).
+2. Press **Ask macOS for permission** on the start page, then in **System Settings → Privacy & Security → Screen & System Audio Recording** turn on the app you started Flute Arranger from (usually Terminal).
+3. Quit that app, open it again, and run `./run.sh`.
+
 Command line, if you'd rather:
 
 ```sh
@@ -65,6 +75,7 @@ uv venv --python 3.11 .venv
 uv pip install --python .venv/bin/python -r requirements.txt
 uv pip install --python .venv/bin/python --no-deps tinysoundfont
 scripts/fetch_models.sh       # piano sound for previews (MuseScore_General, MIT)
+scripts/build_sysaudio.sh     # optional: the recorder for "Listen to this computer"
 ```
 
 The piano transcription model downloads itself into `models/` on first use, and the stem separation model into `~/.cache/huggingface`. No Homebrew packages are needed: audio is decoded with the ffmpeg binary that `imageio-ffmpeg` ships.
@@ -79,7 +90,7 @@ On macOS 14 the models run on the CPU (the Apple GPU path crashes there), so a 4
 4. **Pick the tune**: the singing if there is any; the notes a pianist plays louder; otherwise the highest sensible line through the notes.
 5. **Fit it to the flute**: one octave move for the whole piece, then whole phrases moved where needed, never single notes.
 6. **Clean the rhythm**: snap to plain 8ths where the playing allows, hold notes through short gaps, add breath marks in long phrases.
-7. **Piano part**: chords found per half bar, voiced below the flute.
+7. **Piano part**: one chord per beat at most, chosen across the whole piece at once (dynamic programming): chords that contain the tune's strong-beat notes, belong to the key, move the way real progressions do (ii–V–I, cadences at phrase ends), with 7th chords and the real bass note (inversions included). A tune with no accompaniment is harmonized. Voiced below the flute, never above it.
 8. **Engrave** with Verovio, and play a preview with a soundfont.
 
 Code: `sheetswap/` (one file per step), web page in `sheetswap/web/`, tests in `tests/` (`.venv/bin/python -m pytest`; `-m slow` runs the model tests), measurements in `bench/`.

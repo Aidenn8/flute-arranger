@@ -59,12 +59,32 @@ def _spellings(fifths: int, mode: str) -> tuple[dict[int, tuple[str, int]], froz
         lead = _LETTERS[(_LETTERS.index(tonic_letter) + 4) % 7]   # 7th degree of the minor key
         table[(major_pc + 8) % 12] = (lead, alters[lead] + 1)
         in_key.add((major_pc + 8) % 12)
+    # chromatic notes: the spelling each altered degree conventionally takes,
+    # so a note is written the same way all through the piece
+    tonic = (7 * fifths + (9 if mode == "minor" else 0)) % 12
+    for interval, way in (_MINOR_CHROMATIC if mode == "minor" else _MAJOR_CHROMATIC).items():
+        pc = (tonic + interval) % 12
+        if pc in in_key:
+            continue
+        letter, alter = table[(pc - way) % 12]          # the scale note it alters
+        if -2 <= alter + way <= 2:
+            table[pc] = (letter, alter + way)
     return table, frozenset(in_key)
 
 
+# Semitones above the tonic -> +1 (raise the scale note below) or -1 (lower the one above).
+# Major: #1 (leading tone to ii), b3 (blue / borrowed), #4 (leading tone to V),
+# b6 and b7 (borrowed from the minor key). Minor: b2 (Neapolitan), #3 (Picardy
+# third), #4 (leading tone to V), #6 (melodic minor); #7 is already in the key.
+_MAJOR_CHROMATIC = {1: 1, 3: -1, 6: 1, 8: -1, 10: -1}
+_MINOR_CHROMATIC = {1: -1, 4: 1, 6: 1, 9: 1}
+
+
 def spell(midi: int, fifths: int, mode: str = "major", direction: int = 0) -> pitch.Pitch:
-    """Spell a MIDI pitch in a key. `direction` is where the melody goes next:
-    a chromatic note leading up is written sharp, leading down flat."""
+    """Spell a MIDI pitch in a key. `direction` is set for a chromatic passing
+    note (+1 stepping up, -1 stepping down): it is written sharp going up and
+    flat going down. Otherwise (neighbour notes like E-D#-E, leaps) chromatic
+    notes take their key's conventional spelling."""
     table, in_key = _spellings(max(-7, min(7, fifths)), mode)
     pc = midi % 12
     letter, alter = table[pc]
@@ -105,9 +125,27 @@ def _line_events(line: list[QNote], shift: int) -> list[_Event]:
     for i, n in enumerate(notes):
         end = min(n.end, notes[i + 1].start) if i + 1 < len(notes) else n.end
         nxt = next((m.pitch for m in notes[i + 1:i + 4] if m.pitch != n.pitch), n.pitch)
+        prv = next((m.pitch for m in reversed(notes[max(0, i - 3):i]) if m.pitch != n.pitch), n.pitch)
         out.append(_Event(n.start + shift, end - n.start, (n.pitch,), n.velocity,
-                          n.breath_after, (nxt > n.pitch) - (nxt < n.pitch)))
+                          n.breath_after, _passing(prv, n.pitch, nxt)))
     return out
+
+
+def _passing(prev: int, p: int, nxt: int) -> int:
+    """Which way a chromatic note leans, for spelling it: +1 up, -1 down, 0 neither.
+
+    A note that resolves by a semitone is spelled so the step is a minor
+    second (G-flat to F, not F-sharp to F); a passing note follows its
+    direction; anything else (E D# E... with a leap away) gets the key's
+    conventional spelling.
+    """
+    if abs(nxt - p) == 1:
+        return nxt - p
+    if 0 < p - prev <= 2 and 0 < nxt - p <= 2:
+        return 1
+    if 0 < prev - p <= 2 and 0 < p - nxt <= 2:
+        return -1
+    return 0
 
 
 def _flute_lookup(flute: list[QNote]):
