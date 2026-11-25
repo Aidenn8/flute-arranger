@@ -221,6 +221,124 @@ def test_bad_screenshot_among_several_is_named(tmp_path, monkeypatch):
         omr.images_to_musicxml([good, bad], tmp_path / "song")
 
 
+# --------------------------------------------------------------------------- rhythm repair
+# "work on any ideas to imrpove the accuracy and rhtyhm": bars that add up, rests with
+# their real value, the time signature the bars support, notes back on their staff.
+
+def _o_note(step, octave, dur, typ, staff=1, alter=0, dot=False, chord=False):
+    """A note as oemer writes it (16 divisions a quarter)."""
+    return (f"<note>{'<chord/>' if chord else ''}<pitch><step>{step}</step><alter>{alter}</alter>"
+            f"<octave>{octave}</octave></pitch><duration>{dur}</duration><type>{typ}</type>"
+            f"{'<dot/>' if dot else ''}<staff>{staff}</staff><voice>1</voice></note>")
+
+
+def _o_rest(dur, staff=1):
+    return f'<note><rest measure="yes" /><duration>{dur}</duration><staff>{staff}</staff></note>'
+
+
+def _o_score(path, measures, beats=4, beat_type=4, staves=1):
+    clefs = ('<clef number="1"><sign>G</sign><line>2</line></clef>'
+             + ('<clef number="2"><sign>F</sign><line>4</line></clef>' if staves > 1 else ""))
+    time = f"<time><beats>{beats}</beats><beat-type>{beat_type}</beat-type></time>" if beats else ""
+    body = "".join(
+        f'<measure number="{k + 1}">'
+        + (f"<attributes><divisions>16</divisions><key><fifths>0</fifths></key>{time}"
+           f"{'<staves>2</staves>' if staves > 1 else ''}{clefs}</attributes>" if k == 0 else "")
+        + m + "</measure>" for k, m in enumerate(measures))
+    path.write_text('<?xml version="1.0" encoding="UTF-8"?><score-partwise><part-list>'
+                    '<score-part id="P1"><part-name>Piano</part-name></score-part></part-list>'
+                    f'<part id="P1">{body}</part></score-partwise>')
+    return path
+
+
+def _bars(path, staff=0):
+    sc = converter.parse(str(path))
+    out = []
+    for m in sc.parts[staff].getElementsByClass(stream.Measure):
+        out.append([(n.nameWithOctave if n.isNote else "r", float(n.offset), float(n.quarterLength))
+                    for n in m.notesAndRests])
+    return out
+
+
+def test_repair_reads_a_misread_rest_and_keeps_the_pickup(tmp_path):
+    """Für Elise in 3/8 as oemer reads it: the 16th rests come out as 8th rests, the
+    bars as 9/8, every rest as a whole-bar rest."""
+    e = lambda s, o, t: _o_note(s, o, 4, "16th") if t == 16 else _o_note(s, o, 8, "eighth")  # noqa: E731
+    bars = [e("E", 5, 16) + e("D", 5, 16),                              # pickup
+            "".join(e(s, o, 16) for s, o in [("E", 5), ("D", 5), ("E", 5), ("B", 4), ("D", 5), ("C", 5)]),
+            e("A", 4, 8) + _o_rest(8) + e("C", 4, 16) + e("E", 4, 16) + e("A", 4, 16),
+            e("B", 4, 8) + _o_rest(12) + e("E", 4, 16) + e("G", 4, 16) + e("B", 4, 16),
+            e("C", 5, 8) + _o_rest(8) + e("E", 4, 16) + e("E", 5, 16) + e("D", 5, 16),
+            "".join(e(s, o, 16) for s, o in [("E", 5), ("D", 5), ("E", 5), ("B", 4), ("D", 5), ("C", 5)]),
+            e("A", 4, 8) + _o_rest(8) + e("C", 4, 16) + e("E", 4, 16) + e("A", 4, 16),
+            e("B", 4, 8) + _o_rest(8)]
+    xml = _o_score(tmp_path / "elise.musicxml", bars, beats=9, beat_type=8)
+    done = omr.repair_rhythm(xml)
+    assert done["meter"] == "3/8" and done["fixed"] >= 4
+    got = _bars(xml)
+    assert sum(q for _, _, q in got[0]) == 0.5                          # the pickup stays short
+    assert all(sum(q for _, _, q in b) == 1.5 for b in got[1:-1])       # R-METER-1
+    assert got[2] == [("A4", 0.0, 0.5), ("r", 0.5, 0.25), ("C4", 0.75, 0.25), ("E4", 1.0, 0.25),
+                      ("A4", 1.25, 0.25)]
+    assert 'measure="yes"' not in xml.read_text()                       # rests have their value
+
+
+def test_repair_takes_the_odd_8th_in_a_16th_run(tmp_path):
+    run = [("D", 4, 8, "eighth")] + [(s, o, 4, "16th") for s, o in
+                                      [("E", 4), ("F", 4), ("G", 4), ("A", 4), ("B", 4), ("C", 5)]]
+    run += [("D", 5, 8, "eighth"), ("A", 4, 4, "16th"), ("B", 4, 4, "16th"), ("C", 5, 8, "eighth"),
+            ("D", 5, 4, "16th"), ("E", 5, 4, "16th"), ("F", 5, 4, "16th"), ("G", 5, 4, "16th")]
+    bar = "".join(_o_note(s, o, d, t) for s, o, d, t in run)               # 72 divisions for 64
+    plain = "".join(_o_note(s, 5, 16, "quarter") for s in "CDEF")
+    xml = _o_score(tmp_path / "k545.musicxml", [plain, plain, bar, plain, plain])
+    assert omr.repair_rhythm(xml)["meter"] == "4/4"
+    got = _bars(xml)[2]
+    assert [q for _, _, q in got] == [0.5] + [0.25] * 14                 # D5 and C5 were 16ths
+    assert sum(q for _, _, q in got) == 4.0
+
+
+def test_repair_moves_left_hand_notes_read_on_the_treble_staff(tmp_path):
+    """K545's Alberti bass climbs above the bass staff; oemer reads its top notes
+    against the treble staff (F3, three ledger lines down): they go back down."""
+    rh = _o_note("C", 5, 32, "half") + _o_note("F", 3, 16, "quarter") + _o_note("E", 5, 16, "quarter")
+    lh = "".join(_o_note(s, 4, 8, "eighth", staff=2) for s in "CEC")
+    bar = rh + "<backup><duration>64</duration></backup>" + lh + _o_rest(40, staff=2)
+    full = _o_note("C", 5, 64, "whole") + "<backup><duration>64</duration></backup>" + _o_rest(64, staff=2)
+    xml = _o_score(tmp_path / "alberti.musicxml", [full, bar, full], staves=2)
+    done = omr.repair_rhythm(xml)
+    assert done["moved"] == 1
+    top = _bars(xml, 0)[1]
+    assert [n for n, _, _ in top] == ["C5", "E5", "r"] or [n for n, _, _ in top][:2] == ["C5", "E5"]
+    low = [n for b in _bars(xml, 1) for n, _, _ in b]
+    assert "G4" in low                                                 # F3 in the treble = G4 above the bass staff
+
+
+def test_repair_puts_a_misread_key_signature_back(tmp_path):
+    """One system read with 5 flats among systems of 4 (R-ACC-9): its G-flats were the
+    misreading's, not the music's."""
+    bar = "".join(_o_note(s, 5, 16, "quarter") for s in "CDEF")
+    gs = _o_note("G", 4, 16, "quarter", alter=-1) * 4
+    key5 = ('<print new-system="yes" /><attributes><key><fifths>-5</fifths></key></attributes>')
+    key4 = ('<print new-system="yes" /><attributes><key><fifths>-4</fifths></key></attributes>')
+    xml = _o_score(tmp_path / "keys.musicxml", [bar, bar, key5 + gs, gs, key4 + bar, bar])
+    text = xml.read_text().replace("<fifths>0</fifths>", "<fifths>-4</fifths>")
+    xml.write_text(text)
+    done = omr.repair_rhythm(xml)
+    assert done["keys"] == 2
+    sc = converter.parse(str(xml))
+    g = [n.pitch.name for n in sc.parts[0].recurse().notes if n.pitch.step == "G"]
+    assert g == ["G"] * 8
+    assert {k.sharps for k in sc.recurse().getElementsByClass(key.KeySignature)} == {-4}
+
+
+def test_repair_leaves_a_right_score_alone(tmp_path):
+    plain = "".join(_o_note(s, 5, 16, "quarter") for s in "CDEF")
+    xml = _o_score(tmp_path / "ok.musicxml", [plain] * 4)
+    done = omr.repair_rhythm(xml)
+    assert done["meter"] == "4/4" and done["fixed"] == done["padded"] == done["moved"] == 0
+    assert all(b == [(f"{s}5", float(i), 1.0) for i, s in enumerate("CDEF")] for b in _bars(xml))
+
+
 def test_name_option_and_model_failure(tmp_path, monkeypatch):
     def broken(png, xml):
         raise IndexError("oemer lost track of a staff")

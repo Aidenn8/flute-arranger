@@ -55,8 +55,11 @@ def test_checks_flag_empty_flute():
 
 
 def test_problems_name_bars():
-    # bar 3 in 4/4 starts at tick 96; with a pickup the score gains a lead-in bar
+    # bar 3 in 4/4 starts at tick 96; a pickup bar is bar 0 (R-PAGE-5), so the
+    # first full bar is still bar 1; a lead-in of whole bars is counted
     arr = Arrangement(flute=[QNote(72, 0, 12), QNote(40, 100, 12)])
     assert "bar 3" in check_arrangement(arr, simple=False)[0]
     arr_pickup = Arrangement(flute=[QNote(72, -6, 6), QNote(40, 100, 12)])
-    assert "bar 4" in check_arrangement(arr_pickup, simple=False)[0]
+    assert "bar 3" in check_arrangement(arr_pickup, simple=False)[0]
+    arr_lead_bar = Arrangement(flute=[QNote(72, -48, 12), QNote(40, 100, 12)])
+    assert "bar 4" in check_arrangement(arr_lead_bar, simple=False)[0]

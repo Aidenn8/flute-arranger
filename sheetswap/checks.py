@@ -22,13 +22,30 @@ def lead_in_ticks(arr: Arrangement) -> int:
     return -(earliest // bar) * bar
 
 
+def pickup_start(arr: Arrangement) -> int:
+    """Where the music of a pickup bar starts, in ticks into that (first) bar;
+    0 when the first bar is complete (no pickup, or a lead-in of whole bars).
+
+    A pickup bar holds only its notes, no rests before them (R-PAGE-5)."""
+    lead = lead_in_ticks(arr)
+    if not lead:
+        return 0
+    earliest = min(n.start for n in (*arr.flute, *arr.rh, *arr.lh))
+    return (earliest + lead) % bar_ticks(arr)
+
+
+def printed_bar(arr: Arrangement, tick: int) -> int:
+    """The bar number printed over a tick: bars count from 1 at the first full
+    bar, so a pickup bar is bar 0 (R-PAGE-5)."""
+    return (tick + lead_in_ticks(arr)) // bar_ticks(arr) + (0 if pickup_start(arr) else 1)
+
+
 def _name(pitch: int) -> str:
     return f"{_NAMES[pitch % 12]}{pitch // 12 - 1}"
 
 
 def _where(arr: Arrangement, notes: list[QNote]) -> str:
-    bar, lead = bar_ticks(arr), lead_in_ticks(arr)
-    bars = sorted({(n.start + lead) // bar + 1 for n in notes})
+    bars = sorted({printed_bar(arr, n.start) for n in notes})
     shown = ", ".join(str(b) for b in bars[:8]) + (", ..." if len(bars) > 8 else "")
     return f"bar {shown}" if len(bars) == 1 else f"bars {shown}"
 

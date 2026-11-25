@@ -70,17 +70,17 @@ def test_tempo_meter_key_title():
     assert flute_part(s).partName == "Flute"
 
 
-def test_pickup_notes_padded():
+def test_pickup_bar_holds_only_the_pickup():
+    # R-PAGE-5: the pickup bar has no rests before its notes and is bar 0
     arr = Arrangement(flute=[q(67, -6, 6), q(72, 0, 12), q(74, 12, 36)])
     s = build_score(arr, "Pickup")
     part = flute_part(s)
-    m1, m2 = bar(part, 1), bar(part, 2)
-    assert m1.duration.quarterLength == 4.0
-    rests = [el for el in m1.notesAndRests if el.isRest]
-    notes = [el for el in m1.notesAndRests if not el.isRest]
-    assert sum(r.quarterLength for r in rests) == 3.5
-    assert len(notes) == 1 and notes[0].pitch.midi == 67 and notes[0].offset == 3.5
-    first_down = m2.notes[0]
+    m0, m1 = bar(part, 1), bar(part, 2)
+    assert m0.number == 0 and m1.number == 1
+    assert m0.duration.quarterLength == 0.5 and m0.paddingLeft == 3.5
+    assert [el.isRest for el in m0.notesAndRests] == [False]
+    assert m0.notes[0].pitch.midi == 67 and m0.notes[0].offset == 0
+    first_down = m1.notes[0]
     assert first_down.offset == 0 and first_down.pitch.midi == 72
 
 

@@ -360,3 +360,22 @@ def test_a_sung_scoop_into_a_note_is_left_out():
     q = quantize_line(notes, _steady(0.5, n=50))
     assert [(n.pitch, n.start) for n in q][1:4] == [(71, 12), (72, 24), (70, 36)]
     assert len(q) == 40
+
+
+def test_beat_one_holds_on_to_a_late_note_longer():
+    # quarter notes in 3/4, one of them played late: read on its beat up to some
+    # lateness, then as an 8th after the beat. On beat 1 (the strongest place in the
+    # bar) it is read on the beat at least as late as on beat 2, and somewhere later.
+    from sheetswap.rhythm import _read_rhythm
+
+    def on_the_beat(k, late):
+        onsets = [12.0 * b + (late if b == k else 0.0) for b in range(24)]
+        ticks, _ = _read_rhythm(onsets, 12, beats_per_bar=3)
+        return ticks[k] == 12 * k
+
+    lates = np.arange(2.5, 6.0, 0.05)
+    down = [on_the_beat(9, x) for x in lates]          # beat 9: a downbeat
+    weak = [on_the_beat(10, x) for x in lates]         # beat 10: beat 2 of its bar
+    assert all(d or not w for d, w in zip(down, weak))
+    assert sum(down) > sum(weak)
+    assert down[0] and not down[-1]

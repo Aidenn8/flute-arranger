@@ -53,7 +53,7 @@ def test_corrupt_caches_are_rebuilt(tmp_path):
     pipeline.analyze(d)
     opts = ArrangeOptions()
     pipeline.arrange_and_render(d, opts)
-    (d / "arr" / opts.key() / "info.json").write_text('{"pages": 1, "musi')   # killed mid-write
+    (d / "arr" / f"v{pipeline.RENDER_VERSION}-{opts.key()}" / "info.json").write_text('{"pages": 1, "musi')   # killed mid-write
     (d / "analysis.json").write_text('{"song_id"')
     assert pipeline.analyze(d).kind == "midi"
     assert pipeline.arrange_and_render(d, opts)["svgs"]
@@ -84,7 +84,7 @@ def test_render_is_cached(tmp_path):
     pipeline.analyze(d)
     opts = ArrangeOptions()
     pipeline.arrange_and_render(d, opts)
-    info = d / "arr" / opts.key() / "info.json"
+    info = d / "arr" / f"v{pipeline.RENDER_VERSION}-{opts.key()}" / "info.json"
     before = info.stat().st_mtime_ns
     pipeline.arrange_and_render(d, opts)
     assert info.stat().st_mtime_ns == before
@@ -261,7 +261,9 @@ def test_six_eight_midi_end_to_end(tmp_path):
         back = converter.parse(res["musicxml"])
         for part in back.parts:
             for m in part.getElementsByClass(stream.Measure):
-                assert m.duration.quarterLength == 3.0, (mode, part, m.number)
+                # the pickup is bar 0 and holds just its 8th (R-PAGE-5); the rest are full
+                full = 0.5 if m.number == 0 else 3.0
+                assert m.duration.quarterLength == full, (mode, part, m.number)
         played = pretty_midi.PrettyMIDI(str(res["midi"]))
         sig = played.time_signature_changes[0]
         assert (sig.numerator, sig.denominator) == (6, 8)

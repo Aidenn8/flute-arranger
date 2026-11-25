@@ -11,18 +11,20 @@ Nothing is guessed from sound: the rhythm is the score's own.
 The line taken from a part (`top_line`):
 - a single-line part (violin, flute, voice, ...) as written; where it plays
   two or more notes at once (double stops, divisi), the top note;
-- a piano part (also organ, harp, guitar, ...): the top line of its upper
-  staff, the right hand. At each new note the highest one is taken, except a
-  note that starts under a higher note still held from before (an inner voice).
-  The right hand is kept even where it rests while the tune moves to the left
-  hand: a simple rule; "Which part is the tune?" can pick the left hand.
+- a piano part (also organ, harp, guitar, ...): each staff's top line (at
+  each new note the highest one, except a note that starts under a higher note
+  still held from before, an inner voice), and one more part, "<piano>, the
+  tune", that follows the tune bar by bar through both hands (`find_tune`): into
+  the left hand under right-hand chords, onto a separate upper voice over a
+  figure in the same hand, silent through an accompaniment-only introduction.
+  It is added only where it differs from the right hand's top line.
 Ties are joined into one note; a grace note becomes a "grace" mark on the
 note it leads into.
 
 Which part is the tune by default ("auto", `auto_part`): the first
 single-line part that has a fair share of the notes and isn't a bass part
 (violin I in a quartet, the voice in a song, the soprano in a chorale),
-otherwise the piano's right hand.
+otherwise the piano's tune, otherwise its right hand.
 
 Kept from the score, as model.Mark (see there for the kinds): dynamics,
 hairpins, slurs, staccato / tenuto / accent, fermatas, trills, mordents
@@ -44,8 +46,9 @@ MIDI files: only those that look written rather than played are read here
 (`load_notated_midi`: a time signature, and nearly all notes starting on a
 32nd / 16th-triplet grid). Their ticks come straight from the file. A MIDI
 file has no bar lines, and notation programs start it at the pickup, so the
-first downbeat is found as the place in the bar that puts the most note time
-on downbeats and beats (the file's own start wins near-ties).
+first downbeat is found as the bar phase that puts the most note time on
+downbeats while cutting the fewest notes at bar lines, with a prior on the
+pickup's length (`_first_downbeat`).
 
 The parsed score is kept as JSON (ScoreSource.save, song_dir/score.json by
 the pipeline), so arranging never parses the file again.
@@ -75,7 +78,6 @@ LINE_SHARE = 0.25              # auto: a single-line part needs this share of th
 BASS_MEAN = 55                 # auto: a line whose notes average below G3 is a bass part
 NOTATED_SHARE = 0.9            # MIDI: share of onsets on the 32nd / 16th-triplet grid
 GRID48 = 48                    # MIDI: positions per quarter a written note can start on
-PHASE_MARGIN = 1.15            # MIDI: a bar phase must beat the file's own start by this much
 GRACE_MAX_Q = 0.12             # MIDI: shorter off-grid notes are grace notes (in quarters)
 
 NOTE_MARKS = {"staccato", "tenuto", "accent", "fermata", "trill", "mordent", "turn", "grace"}
@@ -124,6 +126,7 @@ class ScorePart:
     notes: list[QNote] = field(default_factory=list)     # every note on this staff
     marks: list[Mark] = field(default_factory=list)      # the expression on `melody`
     warnings: list[str] = field(default_factory=list)    # about this part only
+    tune: bool = False        # follows the tune through a keyboard part's staves (find_tune)
 
     @property
     def label(self) -> str:
@@ -280,6 +283,318 @@ def top_line(events: list[_Ev]) -> list[_Ev]:
     for a, b in zip(joined, joined[1:]):
         a.end = min(a.end, b.start)
     return [e for e in joined if e.end > e.start]
+
+
+# ---------------------------------------------------------------- the tune of a keyboard part
+#
+# A piano's tune is not always the right hand's top line: it moves to the left hand
+# under right-hand chords (Schumann's "Happy Farmer", Chopin's B minor prelude), it
+# is a separate upper voice over a figure in the same hand (the Moonlight sonata's
+# triplets), and an introduction may have no tune at all. find_tune follows it bar by
+# bar through each staff's top line, scoring how much each looks like a tune:
+# - register: the tune is usually the highest line (one point an octave above C4);
+# - steps: a tune moves mostly by step (half a point for a line that only steps);
+# - accompaniment (minus 2.5 points for a bar of it): figures that repeat beat after
+#   beat (Alberti bass, broken-chord patterns), block chords struck again within two
+#   bars (after-beat chords, a chord pattern), the same note pulsed in 8ths, and an
+#   even run of short notes under a separate, longer upper voice (a figure).
+# Broken-chord notes that are the tune stay: a line is taken or left a whole bar at a
+# time, so Für Elise's A-C-E-A answer keeps its chord notes. Moving the tune to another
+# staff costs half a point, so it moves only for a clear reason; a bar where every line
+# scores below -1.5 has no tune (the flute rests). When the tune moves, the new line's
+# upbeat (notes after a rest in the last beat before the move) comes with it.
+# Measured with bench/piano_tune.py on 12 piano pieces with hand-checked tunes.
+
+TUNE_REGISTER = 1.0     # per octave above C4, the line's mean (clipped to +-2 octaves)
+TUNE_STEP = 0.5         # times the share of steps (1-2 semitones) among the line's moves
+TUNE_ACCOMP = 2.5       # times the share of the bar's notes that look like accompaniment
+TUNE_REST = -1.5        # what "no tune in this bar" scores
+TUNE_SWITCH = 0.5       # moving the tune to another line
+TUNE_HOLD = 0.2         # bonus for a line still holding a note through a bar it doesn't strike in
+FIGURE_BARS = 2         # a figure: an even run of short notes at least this many bars long
+FIGURE_MAX = T // 2     # ... of notes no longer than an 8th
+FIGURE_UNDER = 0.3      # ... with this share of its notes sounding under a longer, higher note
+ALTERNATION = 8         # this many notes swinging between two pitches: a measured trill figure
+FIGURE_WEIGHT = 2.0     # a figure's note counts as this much accompaniment
+
+
+def _skyline(notes: list[QNote]) -> list[QNote]:
+    """top_line for QNotes: the highest line, each note cut at the next one's start."""
+    evs = [_Ev(q.start, q.end, q.pitch, q.velocity) for q in notes if q.dur > 0]
+    return [QNote(e.pitch, e.start, e.end - e.start, e.velocity) for e in top_line(evs)]
+
+
+def _chains(notes: list[QNote]) -> dict[int, list[list[int]]]:
+    """Even runs of equally short notes (each onset where the last one ends, or one
+    note later), by length: {duration: [[indices of `notes`], ...]}."""
+    by_dur: dict[int, list[int]] = {}
+    for i, q in enumerate(notes):
+        if 0 < q.dur <= FIGURE_MAX:
+            by_dur.setdefault(q.dur, []).append(i)
+    out: dict[int, list[list[int]]] = {}
+    for d, idx in by_dur.items():
+        idx.sort(key=lambda i: notes[i].start)
+        chains: list[list[int]] = []
+        for i in idx:
+            last = notes[chains[-1][-1]].start if chains else None
+            # the next note of the run, at the same time (a chord) or one note later; a run
+            # skipping one note goes on (a note of it struck by the tune's own key)
+            if chains and notes[i].start in (last, last + d, last + 2 * d):
+                chains[-1].append(i)
+            else:
+                chains.append([i])
+        out[d] = chains
+    return out
+
+
+def _figure_notes(staves: list[list[QNote]], bar: int) -> list[set[int]]:
+    """For each staff, the indices of its notes that form an accompaniment figure
+    under a separate tune: an even run of equally short notes at least FIGURE_BARS
+    bars long with at least two longer notes sounding above it in the same staff (the
+    Moonlight sonata's triplets under its tune). Then every run of that note length a
+    bar or longer, anywhere in the piece, is the same figure (where the tune rests),
+    and so is every run of three or more within a bar of it (the figure passes between
+    the hands). A run with nothing above it (Für Elise's 16ths, a scale) is not a figure."""
+    chains = [_chains(notes) for notes in staves]
+    spans: dict[int, list[tuple[int, int]]] = {}        # note length -> where a figure of it runs
+    for notes, by_dur in zip(staves, chains):
+        order = sorted(range(len(notes)), key=lambda j: notes[j].start)
+        starts_of = [notes[j].start for j in order]
+        for d, runs in by_dur.items():
+            for ch in runs:
+                a, b = notes[ch[0]].start, notes[ch[-1]].end
+                if b - a < FIGURE_BARS * bar:
+                    continue
+                tops: dict[int, int] = {}
+                for i in ch:
+                    tops[notes[i].start] = max(tops.get(notes[i].start, 0), notes[i].pitch)
+                times = sorted(tops)
+                members = set(ch)
+                lo_i = bisect_left(starts_of, a)
+                hi_i = bisect_left(starts_of, b)
+                upper = []
+                for j in order[lo_i:hi_i]:
+                    q = notes[j]
+                    if j in members or q.dur < 2 * d:
+                        continue
+                    k = max(0, bisect_right(times, q.start) - 1)      # the run's note sounding then
+                    if q.pitch > tops[times[k]]:
+                        upper.append(q)
+                if len(upper) < 2:
+                    continue
+                under = 0
+                for u in upper:                                     # run notes under a tune note
+                    under += bisect_left(times, u.end) - bisect_left(times, u.start)
+                if under >= FIGURE_UNDER * len(tops):
+                    spans.setdefault(d, []).append((a - bar, b + bar))
+    out = []
+    for notes, by_dur in zip(staves, chains):
+        mine: set[int] = set()
+        for d, near in spans.items():
+            for ch in by_dur.get(d, ()):
+                a, b = notes[ch[0]].start, notes[ch[-1]].end
+                if b - a >= bar or (len(ch) >= 3 and any(a < y and b > x for x, y in near)):
+                    mine |= set(ch)
+        out.append(mine)
+    return out
+
+
+def _swings(line: list[QNote]) -> set[tuple[int, int]]:
+    """(pitch, start) of the notes of `line` inside a run of ALTERNATION or more notes
+    swinging between two pitches (a measured trill or tremolo figure)."""
+    out: set[tuple[int, int]] = set()
+    i = 0
+    while i < len(line):
+        j = i + 2
+        while j < len(line) and line[j].pitch == line[j - 2].pitch != line[j - 1].pitch:
+            j += 1
+        if j - i >= ALTERNATION:
+            out |= {(q.pitch, q.start) for q in line[i:j]}
+            i = j
+        else:
+            i += 1
+    return out
+
+
+def _accomp_flags(line: list[QNote], notes: list[QNote], figure: set[tuple[int, int]],
+                  bar: int, beat: int, swing: set[tuple[int, int]] = frozenset()) -> list[float]:
+    """For each note of a staff's top line: how much it looks like accompaniment, 0
+    (not at all), 1, or FIGURE_WEIGHT for a note of a figure (_figure_notes)."""
+    groups: dict[int, list[QNote]] = {}
+    for q in notes:
+        groups.setdefault(q.start, []).append(q)
+    chord_at: dict[int, frozenset] = {}           # onset -> pitches of the block chord struck there
+    for t, qs in groups.items():
+        top = max(qs, key=lambda q: q.pitch)
+        same = [q.pitch for q in qs if abs(q.dur - top.dur) <= 1]
+        if len(same) >= 2:
+            chord_at[t] = frozenset(same)
+    onsets = sorted(groups)
+    sig: dict[int, tuple] = {}                    # beat index -> the line's notes in it
+    for q in line:
+        k = q.start // beat
+        sig[k] = sig.get(k, ()) + ((q.start - k * beat, q.pitch),)
+    flags = []
+    for i, q in enumerate(line):
+        prev = line[i - 1] if i else None
+        k = q.start // beat
+        if (q.pitch, q.start) in figure:
+            flags.append(FIGURE_WEIGHT)
+            continue
+        flag = (q.pitch, q.start) in swing
+        c = chord_at.get(q.start)
+        if not flag and c is not None:
+            k_on = bisect_left(onsets, q.start)          # the same chord struck again next to it
+            again = any(0 <= j < len(onsets) and abs(onsets[j] - q.start) <= beat
+                        and chord_at.get(onsets[j]) == c for j in (k_on - 1, k_on + 1))
+            octaves = len({x % 12 for x in c}) == 1 and q.pitch < 60       # a bass in octaves
+            struck = prev is not None and prev.pitch == q.pitch and prev.start in chord_at
+            flag = again or octaves or struck
+        if not flag and q.dur <= beat // 2:            # a note pulsed in short values
+            nxt = line[i + 1] if i + 1 < len(line) else None
+            flag = any(o is not None and o.pitch == q.pitch and abs(o.start - q.start) <= beat
+                       and o.dur <= beat // 2 for o in (prev, nxt))
+        if not flag and len(sig[k]) >= 2:          # a figure repeated beat after beat (3 times or more)
+            flag = any(all(sig.get(k + p * (j + m)) == sig[k] for m in range(3))
+                       for p in (1, 2) for j in (-2, -1, 0))
+        flags.append(1.0 if flag else 0.0)
+    return flags
+
+
+def _bar_score(line: list[QNote], flags: list[float], lo: int, hi: int, b: int, bar: int) -> float:
+    """How much the notes line[lo:hi] (those starting in bar b) sound like the tune."""
+    if lo == hi:
+        held = lo > 0 and line[lo - 1].end > b * bar
+        return TUNE_REST + (TUNE_HOLD if held else 0.0)
+    seg = line[lo:hi]
+    weight = sum(max(1, q.dur) for q in seg)
+    mean = sum(q.pitch * max(1, q.dur) for q in seg) / weight
+    reg = max(-2.0, min(2.0, (mean - 60) / 12))
+    run = ([line[lo - 1]] if lo and seg[0].start - line[lo - 1].end < bar else []) + seg
+    moves = [abs(b2.pitch - a.pitch) for a, b2 in zip(run, run[1:]) if b2.pitch != a.pitch]
+    step = sum(m <= 2 for m in moves) / len(moves) if moves else 0.0
+    acc = sum(flags[lo:hi]) / len(seg)
+    return TUNE_REGISTER * reg + TUNE_STEP * step - TUNE_ACCOMP * acc
+
+
+def find_tune(staves: list[list[QNote]], bar: int, beat: int
+              ) -> tuple[list[QNote], dict[int, int]]:
+    """The tune of a keyboard part (see the notes above): `staves` are every note of
+    each staff, the top staff first. Returns the tune's notes (one line, each cut at
+    the next one's start) and, for every bar index (tick // bar), the staff the tune's
+    notes there come from (-1: none start in that bar)."""
+    lines: list[tuple[int, list[QNote], list[float]]] = []
+    figures = _figure_notes(staves, bar)
+    # trills and tremolos are found on all the staves' notes together: one passed
+    # between the hands (Für Elise's E-D# before the reprise) belongs to both
+    swing = _swings(_skyline([q for notes in staves for q in notes]))
+    for s, notes in enumerate(staves):
+        fig_idx = figures[s]
+        figure = {(notes[i].pitch, notes[i].start) for i in fig_idx}
+        sky = _skyline(notes)
+        lines.append((s, sky, _accomp_flags(sky, notes, figure, bar, beat, swing)))
+        if fig_idx:
+            rest = [q for i, q in enumerate(notes) if i not in fig_idx]
+            upper = _skyline(rest)
+            lines.append((s, upper, _accomp_flags(upper, rest, set(), bar, beat, swing)))
+    lines = [ln for ln in lines if ln[1]]
+    if not lines:
+        return [], {}
+    first = min(ln[1][0].start for ln in lines) // bar
+    last = max(ln[1][-1].start for ln in lines) // bar
+    bars = list(range(first, last + 1))
+    # per line: index range of the notes starting in each bar
+    spans = []
+    for _, ln, _ in lines:
+        starts = [q.start for q in ln]
+        spans.append({b: (bisect_left(starts, b * bar), bisect_left(starts, (b + 1) * bar)) for b in bars})
+    n = len(lines)
+    rest = n                                       # the "no tune" state
+    emit = [[_bar_score(lines[k][1], lines[k][2], *spans[k][b], b, bar) for k in range(n)] + [TUNE_REST]
+            for b in bars]
+
+    def cost(i: int, j: int) -> float:
+        if i == j:
+            return 0.0
+        if i < n and j < n and lines[i][0] == lines[j][0]:
+            return TUNE_SWITCH * 0.2               # the same staff, with or without its figure
+        return TUNE_SWITCH
+
+    score = list(emit[0])
+    back: list[list[int]] = []
+    for row in emit[1:]:
+        prev = score
+        ptr, score = [], []
+        for j in range(n + 1):
+            i = max(range(n + 1), key=lambda i: (prev[i] - cost(i, j), i == j))
+            ptr.append(i)
+            score.append(prev[i] - cost(i, j) + row[j])
+        back.append(ptr)
+    state = max(range(n + 1), key=lambda j: score[j])
+    path = [state]
+    for ptr in reversed(back):
+        state = ptr[state]
+        path.append(state)
+    path.reverse()
+
+    picked: list[tuple[QNote, int]] = []            # (note, line index)
+    for b, k in zip(bars, path):
+        if k != rest:
+            lo, hi = spans[k][b]
+            picked += [(q, k) for q in lines[k][1][lo:hi]]
+    for b, a, c in zip(bars[1:], path, path[1:]):
+        if c == a or c == rest:
+            continue
+        picked = _upbeat(picked, lines, a if a != rest else None, c, b * bar, beat)
+    picked.sort(key=lambda x: (x[0].start, -x[0].pitch))
+    out: list[QNote] = []
+    for q, _ in picked:
+        if out and out[-1].start == q.start:
+            continue
+        out.append(replace(q))
+    for x, y in zip(out, out[1:]):
+        x.dur = min(x.dur, y.start - x.start)
+    where = {b: (lines[k][0] if k != rest and spans[k][b][0] < spans[k][b][1] else -1)
+             for b, k in zip(bars, path)}
+    return [q for q in out if q.dur > 0], where
+
+
+def _upbeat(picked, lines, a, c, at: int, beat: int):
+    """The tune moves from line a (None: from silence) to line c at tick `at`: c's
+    upbeat in the beat before (unflagged notes after a rest or after accompaniment in
+    c) replaces a's notes from there, unless a strikes a note at that same moment."""
+    _, ln, flags = lines[c]
+    idx = [i for i, q in enumerate(ln) if at - beat <= q.start < at]
+    a_starts = {q.start for q, k in picked if k == a and at - beat <= q.start < at}
+    for pos, i in enumerate(idx):
+        q = ln[i]
+        after_rest = i == 0 or ln[i - 1].end < q.start or flags[i - 1]
+        if not after_rest or any(flags[j] for j in idx[pos:]) or q.start in a_starts:
+            continue
+        keep = [(p, k) for p, k in picked if not (k == a and p.start >= q.start and p.start < at)]
+        return keep + [(ln[j], c) for j in idx[pos:]]
+    return picked
+
+
+def _tune_part(name: str, instrument: str, staves: list["ScorePart"], bar: int,
+               beat: int) -> "ScorePart | None":
+    """A part following the tune through a keyboard part's staves (top staff first),
+    with each staff's marks where the tune is taken from it; None when the tune is
+    simply the top staff's own line."""
+    line, where = find_tune([p.notes for p in staves], bar, beat)
+    if not line or [(q.pitch, q.start) for q in line] == [(q.pitch, q.start) for q in staves[0].melody]:
+        return None
+    marks: list[Mark] = []
+    for s, p in enumerate(staves):
+        for m in p.marks:
+            if m.kind in NOTE_MARKS or m.kind == "slur":
+                if where.get(m.start // bar) == s:
+                    marks.append(m)
+            elif s == 0:                  # dynamics, hairpins and words: the top staff has them all
+                marks.append(m)
+    marks = attach_marks(_dedupe(marks), line)
+    _apply_dynamics(line, marks)
+    return ScorePart(f"{name}, the tune", instrument, 0, True, line, [], marks, [], tune=True)
 
 
 def _graces_to_marks(graces: list[_Ev], line: list[_Ev], before: int = 0) -> list[Mark]:
@@ -629,6 +944,7 @@ def _read_musicxml(path: Path) -> ScoreSource:
     unfold = _Unfold(table, order) if order else None
 
     parts: list[ScorePart] = []
+    tunes: list[ScorePart] = []            # keyboard parts' tunes, listed after every staff
     names_seen: dict[str, int] = {}
     for g in groups:
         name, inst, keyboard = _instrument_info(g[0], len(g))
@@ -641,6 +957,7 @@ def _read_musicxml(path: Path) -> ScoreSource:
         for k, staff in enumerate(g, 1):
             staves.append(_read_staff(staff, ticks, spanners))
             shared += [m for m in staves[-1][2] if m.kind in ("dynamic", "cresc", "dim", "text")]
+        first_part = len(parts)
         for k, (line, every, marks, inexact) in enumerate(staves, 1):
             if not line:
                 continue
@@ -661,6 +978,12 @@ def _read_musicxml(path: Path) -> ScoreSource:
                 pw.append(_inexact_warning(inexact, bar))
             parts.append(ScorePart(label, inst, k if len(g) > 1 else 0, keyboard, melody,
                                    every, own, pw))
+        mine = parts[first_part:]
+        if keyboard and len(g) > 1 and len(mine) >= 2:
+            tune = _tune_part(base, inst, mine, bar, beat)
+            if tune:
+                tunes.append(tune)
+    parts += tunes
     if not parts:
         raise ValueError("That sheet music has no notes in it.")
 
@@ -820,26 +1143,60 @@ def _snap_end(x: Fraction, tol: Fraction = Fraction(1, 20)) -> int:
     return c3 if abs(c3 - x) <= abs(c4 - x) else c4
 
 
-def _bar_phase(notes: list[tuple[int, int]], bar: int, beat: int) -> int:
-    """Where the bar lines fall in a MIDI file (ticks after its start, 0..bar-1):
-    the phase that puts the most note time on downbeats (and some on beats)."""
+def _pickup_prior(p: int, bar: int, beat: int) -> float:
+    """How often a piece starts with a pickup of p ticks (0 = none), roughly as in the
+    bench's scores: none or one beat most often, half a bar (a gavotte), half or a third
+    of a beat sometimes, anything else rarely."""
+    if p == 0:
+        return 0.40
+    if p == beat:
+        return 0.30
+    if 2 * p == bar:
+        return 0.10
+    if p % beat == 0:
+        return 0.06
+    if beat in (2 * p, 3 * p, 4 * p):
+        return 0.05
+    return 0.01
+
+
+def _first_downbeat(notes: list[tuple[int, int]], bar: int, beat: int, bpb: int) -> int:
+    """Where bar 1 starts in a MIDI file (ticks after its start). Each bar phase on the
+    16th / 8th-triplet grid is scored by (bench/midi_downbeat.py):
+    - note time starting on downbeats (a note's length up to a bar; half that on the
+      middle beat of an even bar, a tenth on other beats; R-METER-2/3);
+    - minus twice the note time crossing a bar line (written music ties few notes
+      over bar lines, R-METER-1, so the right bar lines cut few notes);
+    - plus a prior on the pickup it implies (_pickup_prior; R-PAGE-5).
+    A piece starting just after a bar line starts with a rest, not a long pickup."""
     if bar <= 0 or not notes:
         return 0
-    score = {}
+    import math
+    first = min(s for s, _ in notes)
+    total = sum(min(d, bar) for _, d in notes) or 1
+    best, best_v = 0, -math.inf
     for o in range(bar):
         if o % 3 and o % 4:
             continue
-        s = 0.0
+        on = cross = 0.0
         for start, dur in notes:
             pos = (start - o) % bar
             w = min(dur, bar)
             if pos == 0:
-                s += 2.0 * w
+                on += w
+            elif bpb % 2 == 0 and 2 * pos == bar:
+                on += 0.5 * w
             elif pos % beat == 0:
-                s += 0.5 * w
-        score[o] = s
-    best = max(score, key=lambda o: (score[o], o == 0))
-    return best if score[best] > PHASE_MARGIN * score[0] else 0
+                on += 0.1 * w
+            if pos and pos + dur > bar:
+                cross += w
+        d0 = o + bar * -(-(first - o) // bar)
+        if 4 * (d0 - first) > 3 * bar:
+            d0 -= bar
+        v = (on - 2.0 * cross) / total + 0.05 * math.log(_pickup_prior((d0 - first) % bar, bar, beat))
+        if v > best_v:
+            best, best_v = d0, v
+    return best
 
 
 def _midi_key(pm, notes: list[QNote]) -> tuple[int, str]:
@@ -934,13 +1291,10 @@ def _read_midi(path: Path, notated_only: bool) -> ScoreSource | None:
         d0 = int(pickup_at * T)
     else:
         allev = [(e.start, e.end - e.start) for evs, _, _ in per_inst for e in evs]
-        phase = _bar_phase(allev, bar, beat)
-        first = min(s for s, _ in allev)
-        d0 = phase + bar * -(-(first - phase) // bar)
-        if 4 * (d0 - first) > 3 * bar:
-            d0 -= bar                      # music starting just after a bar line: a rest, not a long pickup
+        d0 = _first_downbeat(allev, bar, beat, bpb)
 
     parts: list[ScorePart] = []
+    programs: list[int] = []
     for idx, (inst, (evs, graces, inexact)) in enumerate(zip(insts, per_inst)):
         for e in evs + graces:
             e.start -= d0
@@ -963,8 +1317,17 @@ def _read_midi(path: Path, notated_only: bool) -> ScoreSource | None:
         if melody:
             parts.append(ScorePart(label, gm, 0, inst.program in _MIDI_KEYBOARD, melody,
                                    every, marks, pw))
+            programs.append(inst.program)
     if not parts:
         raise ValueError("This MIDI file has no notes.")
+    # a keyboard instrument on two or more tracks (one per staff): its tune (find_tune)
+    for prog in dict.fromkeys(programs):
+        staves = [p for p, pr in zip(parts, programs) if pr == prog and p.keyboard]
+        if len(staves) >= 2:
+            staves.sort(key=lambda p: -sum(q.pitch for q in p.notes) / len(p.notes))
+            tune = _tune_part(staves[0].instrument, staves[0].instrument, staves, bar, beat)
+            if tune:
+                parts.append(tune)
     fifths, mode = _midi_key(pm, [x for p in parts for x in p.notes])
     _, tempi = pm.get_tempo_changes()
     qbpm = float(tempi[0]) if len(tempi) and tempi[0] > 0 else DEFAULT_BPM[beat] * beat / T
@@ -1005,6 +1368,9 @@ def auto_part(parts: list[ScorePart]) -> int:
         if good:
             return good[0]
     keys = [i for i, p in enumerate(parts) if p.keyboard and p.melody]
+    tunes = [i for i in keys if parts[i].tune]
+    if tunes:
+        return tunes[0]
     upper = [i for i in keys if parts[i].staff == 1]
     if upper:
         return upper[0]
@@ -1193,17 +1559,89 @@ def _quick_note_warning(line: list[QNote], bar: int, lead: int) -> str | None:
             f"{'them' if len(bad) > 1 else 'it'} on the nearest 16th, so check against the original.")
 
 
+BREATH_PHRASE_BARS = 2         # a slur this long or longer is a phrase, and so is the music since the last breath
+
+
+def _phrase_breaths(line: list[QNote], marks: list[Mark], bar: int, add_breath_marks, bpb: int,
+                    beat: int) -> list[QNote]:
+    """Breath marks where the score's own phrasing ends: after the last note of a
+    phrase slur (one at least a bar long) that the next note follows without a rest,
+    when the music since the last rest or breath runs at least BREATH_PHRASE_BARS bars
+    (R-BREATH-1, R-BREATH-3, R-PHR-4); short slurs over a figure or a sung melisma are
+    not phrases. Then rhythm.add_breath_marks finds places in what is still too long,
+    stretch by stretch between these breaths."""
+    out = [replace(q) for q in sorted(line, key=lambda q: q.start)]
+    ends = {m.end for m in marks if m.kind == "slur" and m.end - m.start >= bar}
+    last = out[0].start if out else 0
+    for i, q in enumerate(out[:-1]):
+        nxt = out[i + 1]
+        if nxt.start - q.end >= EIGHTH_BEAT:
+            last = nxt.start                       # a rest: the player breathes there anyway
+            continue
+        if q.start in ends and q.end - last >= BREATH_PHRASE_BARS * bar:
+            q.breath_after = True
+            last = nxt.start
+    pieces, cur = [], []
+    for q in out:
+        cur.append(q)
+        if q.breath_after:
+            pieces.append(cur)
+            cur = []
+    if cur:
+        pieces.append(cur)
+    merged = []
+    for piece in pieces:
+        done = add_breath_marks(piece, bpb, beat)
+        if piece[-1].breath_after:
+            done[-1].breath_after = True
+        merged += done
+    return merged
+
+
+def _phrase_cuts(src: ScoreSource, part: ScorePart, line: list[QNote], marks: list[Mark]) -> set[int]:
+    """Where a new phrase starts inside the line (for flute.phrase_octaves): the note
+    after each slur's last note (R-PHR-4), and where a piano's tune passes from one
+    hand to the other."""
+    starts = sorted(q.start for q in line)
+    cuts = set()
+    for m in marks:
+        if m.kind == "slur":
+            i = bisect_right(starts, m.end)
+            if i < len(starts):
+                cuts.add(starts[i])
+    if part.tune:
+        hand = {}
+        for k, p in enumerate(src.parts):
+            if p.keyboard and not p.tune:
+                for q in p.notes:
+                    hand.setdefault((q.pitch, q.start), k)
+        prev = None
+        for q in sorted(part.melody, key=lambda q: q.start):
+            h = hand.get((q.pitch, q.start))
+            if h is not None and prev is not None and h != prev:
+                cuts.add(q.start)
+            prev = h if h is not None else prev
+    return cuts
+
+
 def arrange_score(src: ScoreSource, opts: ArrangeOptions
                   ) -> tuple[Arrangement, list[Note], BeatGrid]:
     """The flute part from the chosen part's exact notes (no melody picking,
     beat tracking or quantizing): moved into the flute's range, with the
     score's meter, key, tempo and expression marks (arr.expression). Duet mode
-    adds a piano part built from all the other notes of the score.
+    adds a piano part built from all the other notes of the score (for a piano's
+    tune part, without the tune's notes in either hand).
+
+    Then polished for the flute (flute.phrase_octaves, flute.outline_leaps): phrases
+    sitting in the weak low register, or marked f below G4, move up an octave whole
+    (R-FLUTE-1/2; phrases end at rests, at the score's slur ends and where the tune
+    changes hands), fast leaps over an octave become a playable outline (R-FLUTE-5),
+    and breath marks go where the score's slurs end a phrase (R-BREATH-1/3).
 
     Also returns the chosen part's notes in seconds and the steady beat grid
     they sit on, for the expression step (expression.add_expression)."""
     from .checks import check_arrangement, lead_in_ticks
-    from .flute import easy_key_shift, fit_to_flute, key_after_shift
+    from .flute import easy_key_shift, fit_to_flute, key_after_shift, outline_leaps, phrase_octaves
     from .rhythm import add_breath_marks
 
     idx, warnings = choose_part(src, opts.part)
@@ -1230,14 +1668,19 @@ def arrange_score(src: ScoreSource, opts: ArrangeOptions
             line = [replace(q, pitch=q.pitch + shift) for q in line]
             fifths = key_after_shift(fifths, shift)
     line, _octaves = fit_to_flute(line, opts.octave, beat)
+    if not opts.octave:                    # the player's own octave choice is left as chosen
+        line, _moved = phrase_octaves(line, [(m.start, m.value) for m in marks if m.kind == "dynamic"],
+                                      beat, bpb * beat, _phrase_cuts(src, part, line, marks))
+    tick_s = 60.0 / src.quarter_bpm / T
+    line, _outlined = outline_leaps(line, max(3, min(EIGHTH_BEAT, int(0.25 / tick_s))))
     marks = _move_graces(marks, before, line)
-    line = add_breath_marks(line, bpb, beat)
+    line = _phrase_breaths(line, marks, bpb * beat, add_breath_marks, bpb, beat)
 
     rh: list[QNote] = []
     lh: list[QNote] = []
     taken = {(q.pitch, q.start) for q in part.melody}
     pool = [replace(q, start=q.start + moved) for i, p in enumerate(src.parts) for q in p.notes
-            if i != idx or (q.pitch, q.start) not in taken]
+            if not ((i == idx or (part.tune and p.keyboard)) and (q.pitch, q.start) in taken)]
     melody_moved = [replace(q, start=q.start + moved) for q in part.melody]
     grid, sec = score_grid(src, bpb, beat, pool + melody_moved)
     played = [Note(q.pitch, sec(q.start), sec(q.end), q.velocity) for q in melody_moved]

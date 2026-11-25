@@ -2,7 +2,10 @@
 
 top_voice walks through a polyphonic transcription (piano, or an instrument
 stem) and keeps one line: high, loud, fresh notes joined by small steps.
-clean_monophonic tidies a line that is already one voice (the vocal stem).
+piano_melody takes the tune a pianist voices (plays louder); fill_tune adds the
+softer tune notes between those (passing notes, runs), choosing the path that
+moves most like a melody. clean_monophonic tidies a line that is already one
+voice (the vocal stem).
 """
 from __future__ import annotations
 
@@ -328,6 +331,12 @@ def piano_melody(notes: list[Note]) -> list[Note]:
     ns = sorted(notes, key=lambda n: n.start)
     starts = np.array([n.start for n in ns])
     vels = np.array([n.velocity for n in ns], dtype=float)
+    pedal = _pedal_down(np.array([n.pitch for n in ns], dtype=float), starts,
+                        np.array([n.end for n in ns]))
+
+    def pedal_at(t: float) -> bool:
+        return bool(pedal[min(int(np.searchsorted(starts, t)), len(pedal) - 1)])
+
     out = list(line)
     for k, (a, b) in enumerate(zip(line, line[1:])):
         gap = b.start - a.start
@@ -343,9 +352,14 @@ def piano_melody(notes: list[Note]) -> list[Note]:
             continue
         around = float(np.median(vels[lo:hi])) if hi > lo else 0.0
         floor = min(a.pitch, b.pitch) - FILL_RANGE
+        # not while the tune note a still sounds (as in _figure_notes): Chopin's
+        # E minor prelude holds B4 for a bar over repeated chords topped by E4.
+        # Where the pedal looks down, ends only say when it came up (top_voice).
+        held_until = a.end - min(OVERLAP * (a.end - a.start), OVERLAP_MAX)
         for n in top:
-            if (a.start + SAME_ONSET < n.start < b.start - SAME_ONSET and n.pitch >= floor
-                    and n.velocity >= around + FILL_LOUDER):
+            if (a.start + SAME_ONSET < n.start < b.start - SAME_ONSET
+                    and (n.start > held_until or pedal_at(n.start))
+                    and n.pitch >= floor and n.velocity >= around + FILL_LOUDER):
                 out.append(Note(n.pitch, n.start, n.end, n.velocity))
     seen: set[tuple[int, float]] = set()
     uniq = []
@@ -452,6 +466,157 @@ def _hold_restruck(line: list[Note], ns: list[Note]) -> None:
                 break
             end = max(end, n.end)
         a.end = min(end, limit)
+
+
+# fill_tune: the tune's softer notes between the notes the pianist voiced. The
+# scores are log-odds of "this note is the tune", fitted on the notes of 11
+# reference recordings (bench/REFERENCES.md) and rounded; each says something
+# a melody does (docs/notation_rules.md R-THEORY-6: passing and neighbour notes
+# move by step).
+TUNE_GAP = 6.0        # s: longest gap between voiced tune notes that is searched (a slow
+                      # tune voices a note only every bar: Clair de lune)
+TUNE_RANGE = 7        # semitones: candidates reach this far under the tune's register ...
+TUNE_SOFT = 15        # ... and are at most this much softer than the voiced tune around them
+TUNE_AROUND = 3.0     # s each side: "the tune around them"
+TUNE_BIAS = 0.4       # a top note in the tune's register, all else even, is more likely tune
+TUNE_LOUD = 0.05      # per velocity unit over the notes struck within VOICING_SPAN of it
+TUNE_STEP = 0.5       # moving by step (1-2 semitones) from the line note before
+TUNE_SAME = -1.3      # the same key again: a restrike under the pedal, rarely the tune
+TUNE_LEAP = -1.0      # a leap of a 4th to a minor 6th ...
+TUNE_BIG_LEAP = -2.0  # ... a minor 6th or more
+TUNE_HELD = -1.2      # struck while the line note before sounds on for TUNE_HELD_S or
+TUNE_HELD_S = 0.3     #   more: accompaniment under a held tune note
+TUNE_LONG_GAP = -0.9  # in a gap of over a second: the tune rests or is held there
+TUNE_BUSY = -1.2      # TUNE_BUSY_N or more candidates in one gap: a running accompaniment
+TUNE_BUSY_N = 6
+TUNE_NEIGHBOUR_SOFT = 5   # velocity: between two voiced notes of one pitch, a note at most
+                          # this much softer than both (else: accompaniment, Moonlight's triplets)
+
+
+def _interval_score(d: int) -> float:
+    d = abs(d)
+    if d == 0:
+        return TUNE_SAME
+    if d < 3:
+        return TUNE_STEP
+    if d >= 8:
+        return TUNE_BIG_LEAP
+    if d >= 5:
+        return TUNE_LEAP
+    return 0.0
+
+
+def fill_tune(line: list[Note], notes: list[Note]) -> list[Note]:
+    """The voiced tune (piano_melody) with the softer tune notes between its notes.
+
+    projected_line keeps only the notes the pianist played clearly louder;
+    passing notes, the second half of a figure and quick runs drop out, and
+    gaps under FILL_GAP are not searched at all (K.545's 16th scales, Für
+    Elise's E-D#-E-B). In every gap of up to TUNE_GAP between line notes a and
+    b, the candidates are the top note struck at each moment (overtones the
+    model heard and much softer notes don't count, as in _figure_notes) that
+    sit no more than TUNE_RANGE under the tune's register and are at most
+    TUNE_SOFT softer than the tune around them. Through them the likeliest
+    path a -> ... -> b is chosen by dynamic programming (Viterbi), each note
+    scored as tune-like (TUNE_BIAS, louder than its surroundings, a short and
+    quiet gap) and each move by its interval (steps cheap, restrikes and wide
+    leaps dear), and a note struck while the one before still sounds is
+    taken for accompaniment. Between two voiced notes of the same pitch only
+    notes played nearly as loud count (TUNE_NEIGHBOUR_SOFT): a neighbour note
+    of the tune, not the accompaniment under a repeated note. Lines from
+    top_voice (no voicing) are returned as they are. Returns new Note
+    objects, each cut at the next.
+    """
+    if not line or projected_line(notes) is None:
+        return [Note(n.pitch, n.start, n.end, n.velocity) for n in line]
+    ns = sorted(notes, key=lambda n: (n.start, -n.pitch))
+    struck_end = {(n.pitch, round(n.start, 3)): n.end for n in ns}
+    tops = _cluster_tops(ns)
+    ts = np.array([n.start for n in tops])
+    all_s = np.array([n.start for n in ns])
+    all_v = np.array([n.velocity for n in ns], dtype=float)
+    lp = np.array([n.pitch for n in line], dtype=float)
+    lv = np.array([n.velocity for n in line], dtype=float)
+    ls = np.array([n.start for n in line])
+    out = [Note(n.pitch, n.start, n.end, n.velocity) for n in line]
+    for a, b in zip(line, line[1:]):
+        if b.start - a.start > TUNE_GAP:
+            continue
+        lo = int(np.searchsorted(ts, a.start + SAME_ONSET))
+        hi = int(np.searchsorted(ts, b.start - SAME_ONSET))
+        if hi <= lo:
+            continue
+        near = np.abs(ls - a.start) <= TUNE_AROUND
+        floor = max(min(a.pitch, b.pitch), float(np.median(lp[near]))) - TUNE_RANGE
+        soft = float(np.median(lv[near])) - TUNE_SOFT
+        if a.pitch == b.pitch:
+            # a neighbour note between two voiced notes of one pitch is played like
+            # them; a softer one is the accompaniment under a repeated tune note
+            soft = max(soft, min(a.velocity, b.velocity) - TUNE_NEIGHBOUR_SOFT)
+        cand = [n for n in tops[lo:hi] if n.pitch >= floor and n.velocity >= soft]
+        if not cand:
+            continue
+        around = [float(np.median(all_v[np.searchsorted(all_s, c.start - VOICING_SPAN):
+                                         np.searchsorted(all_s, c.start + VOICING_SPAN)]))
+                  for c in cand]
+        a_end = struck_end.get((a.pitch, round(a.start, 3)), a.end)
+        out += _tune_path(a, b, cand, a_end, around)
+    out.sort(key=lambda n: n.start)
+    for x, y in zip(out, out[1:]):
+        x.end = min(x.end, y.start)
+    return [n for n in out if n.end > n.start]
+
+
+def _cluster_tops(ns: list[Note]) -> list[Note]:
+    """The highest note struck at each moment (notes within SAME_ONSET), leaving
+    out overtones the model heard and notes FIGURE_SOFT softer than the loudest."""
+    ghost = _overtones(ns)
+    tops = []
+    i = 0
+    while i < len(ns):
+        j = i + 1
+        while j < len(ns) and ns[j].start - ns[i].start < SAME_ONSET:
+            j += 1
+        group = [k for k in range(i, j) if k not in ghost]
+        if group:
+            loudest = max(ns[k].velocity for k in group)
+            group = [k for k in group if ns[k].velocity > loudest - FIGURE_SOFT]
+            tops.append(ns[max(group, key=lambda k: ns[k].pitch)])
+        i = j
+    return tops
+
+
+def _tune_path(a: Note, b: Note, cand: list[Note], a_end: float, around: list[float]) -> list[Note]:
+    """The likeliest run of `cand` (in time order) between tune notes a and b
+    (Viterbi over which candidate comes right before which); [] if going
+    straight from a to b scores best. a_end: when a's key was let go."""
+    k = len(cand)
+    context = (TUNE_BIAS + (TUNE_LONG_GAP if b.start - a.start > 1.0 else 0.0)
+               + (TUNE_BUSY if k >= TUNE_BUSY_N else 0.0))
+    seq = [a] + cand
+    ends = [a_end] + [c.end for c in cand]
+    best = [0.0] + [-np.inf] * k
+    back = [-1] * (k + 1)
+    for i in range(1, k + 1):
+        c = seq[i]
+        node = context + TUNE_LOUD * (c.velocity - around[i - 1])
+        for j in range(i):
+            if seq[j].start >= c.start - SAME_ONSET:
+                continue
+            held = TUNE_HELD if ends[j] - c.start > TUNE_HELD_S else 0.0
+            v = best[j] + _interval_score(c.pitch - seq[j].pitch) + node + held
+            if v > best[i]:
+                best[i], back[i] = v, j
+    # a and b are both tune notes: a repeated note between them is the tune's own
+    # (Moonlight's dotted G#-G#), not a restrike to be avoided by adding notes
+    direct = 0.0 if a.pitch == b.pitch else _interval_score(b.pitch - a.pitch)
+    final = [direct] + [best[i] + _interval_score(b.pitch - seq[i].pitch) for i in range(1, k + 1)]
+    i = int(np.argmax(final))
+    path = []
+    while i > 0:
+        path.append(seq[i])
+        i = back[i]
+    return [Note(n.pitch, n.start, n.end, n.velocity) for n in reversed(path)]
 
 
 JOIN_GAP = 0.02       # s: a same-pitch note starting this soon after the last one ended ...

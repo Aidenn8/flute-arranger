@@ -34,6 +34,7 @@ import threading
 import time
 import urllib.request
 import warnings
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
@@ -683,7 +684,8 @@ def _expand(images: list[Path], work: Path) -> list[tuple[Path, str, bool]]:
 
 
 def images_to_musicxml(images: list[Path], out_dir: Path,
-                       name: str = "omr.musicxml", title: str | None = None) -> Path:
+                       name: str = "omr.musicxml", title: str | None = None,
+                       repair: bool = True) -> Path:
     """Read several screenshots / photos / PDFs in order and join them into
     one MusicXML score at out_dir/name. Work files (the cleaned-up pages and
     what oemer read from each) stay in out_dir/omr/.
@@ -738,13 +740,18 @@ def images_to_musicxml(images: list[Path], out_dir: Path,
         title = title_from_name(images[0])
     out = out_dir / name
     try:
-        return join_musicxml(read, out, title=title)
+        join_musicxml(read, out, title=title)
     except Exception as e:                          # music21 couldn't rebuild the score
-        if len(read) == 1:
-            log.warning("omr: kept oemer's own MusicXML (%r)", e)
-            shutil.copy(read[0], out)
-            return out
-        raise ValueError(NO_MUSIC) from e
+        if len(read) != 1:
+            raise ValueError(NO_MUSIC) from e
+        log.warning("omr: kept oemer's own MusicXML (%r)", e)
+        shutil.copy(read[0], out)
+    if repair:
+        try:
+            repair_rhythm(out)
+        except Exception as e:                      # a repair that fails leaves oemer's reading
+            log.warning("omr: rhythm repair skipped (%r)", e)
+    return out
 
 
 def image_to_musicxml(image: Path, out_dir: Path, name: str = "omr.musicxml") -> Path:
@@ -769,3 +776,634 @@ def _no_music(label: str, many: bool) -> str:
     if not many:
         return NO_MUSIC
     return NO_MUSIC.replace("that image", f"{label}")
+
+
+# --------------------------------------------------------------------------- rhythm repair
+#
+# oemer reads note heads well but note lengths less so: a 16th rest read as an 8th
+# rest, a dot missed, a flag or beam miscounted (an 8th inside a run of 16ths),
+# triplets read as plain 8ths, and a stray rest added "to balance the rhythm". It
+# writes no time signature (join_musicxml guesses one) and its rests have no type.
+# repair_rhythm puts the bars right the way an engraver would read them:
+# - every bar adds up to the time signature (R-METER-1): in each staff the cheapest
+#   set of readings that fills the bar exactly is taken (dynamic programming over
+#   the bar's notes): a rest's length changed or the rest dropped (cheap: rest
+#   shapes are the most often misread), a dot added or removed, a note's flags
+#   counted one more or one less, three equal notes read as a triplet (R-METER-9);
+#   among equally cheap readings the one whose notes sit where notation puts them
+#   wins (R-METER-5: a note shorter than the beat doesn't cross the beat, an 8th
+#   starts on an 8th, a 16th on a 16th; R-BEAM-1: groups fall within beats);
+# - a first bar that is short is a pickup (R-PAGE-5) and is left short, and so is a
+#   short last bar;
+# - the time signature is the one under which the bars need the fewest repairs (a
+#   9/8 guessed from misread bars of 3/8 goes back to 3/8); oemer over-reads lengths
+#   far more often than it under-reads them, so a bar read short counts against a
+#   meter, and a compound meter must clearly beat its simple twin (6/8 vs 3/4);
+# - notes far below the treble staff in a piano score (three or more ledger lines,
+#   G3 and lower) are the left hand's notes above the bass staff, read against the
+#   wrong staff (R-PAGE-2): they move back to the left hand;
+# - a system whose key signature comes out one accidental off the rest (5 flats among
+#   4) is read in the piece's key (R-ACC-9);
+# - each staff's notes are written as one voice after another, so readers see one
+#   clean line a staff (oemer interleaves the staves note by note).
+
+R_DIV = 48                      # divisions per quarter after repair (32nds and 16th triplets fit)
+_TYPE_LEN = {"whole": 192, "half": 96, "quarter": 48, "eighth": 24, "16th": 12, "32nd": 6, "64th": 3}
+_LEN_TYPE = {v: k for k, v in _TYPE_LEN.items()}
+REST_COST = 0.6                 # a rest's length changed (or the rest dropped)
+DOT_COST = 1.0                  # a dot added or removed
+FLAG_COST = 1.0                 # one flag / beam more or fewer (half or double the value)
+TRIPLET_COST = 1.5              # three equal notes read as a triplet (rare among 16ths, R-METER-9)
+ODD_ONE_COST = 0.7              # an 8th between 16ths (or the reverse) taking its neighbours' value
+EXACT_BONUS = 0.5               # meter choice: a bar that adds up as read
+GROUP_COST = 1.5                # a whole bar's fast notes read one beam off
+SHORT_READ_COST = 1.0           # meter choice: a bar read shorter than the meter's bar
+DROP_NOTE_COST = 3.0            # a note left out (a smudge read as a note)
+PLACE_COST = 0.3                # a note where notation would not put it (R-METER-5)
+MAX_FIX = 6.0                   # meter choice: a bar costs at most this
+MAX_REPAIR = 12.0               # dearer repairs are not made (a short bar is filled with rests)
+REPAIR_METERS = [(2, 4), (3, 4), (4, 4), (3, 8), (6, 8), (9, 8), (12, 8), (6, 4), (2, 2), (3, 2)]
+# a compound meter must earn its place: its bar has the length of a simple one (6/8 = 3/4,
+# 12/8 = 4/4) and oemer reads no time signature to tell them apart
+METER_PRIOR = {(4, 4): 0.0, (3, 4): 0.0, (2, 4): 0.0, (3, 8): 0.0, (6, 8): 0.5, (9, 8): 0.5,
+               (12, 8): 1.5, (2, 2): 0.5, (6, 4): 1.0, (3, 2): 1.0}
+
+
+def _std_lengths(limit: int) -> list[int]:
+    """Plain and dotted note lengths (R_DIV) up to `limit`."""
+    out = set()
+    for v in _TYPE_LEN.values():
+        for x in (v, v * 3 // 2):
+            if x <= limit:
+                out.add(x)
+    return sorted(out)
+
+
+def _spell_length(d: int) -> tuple[str, int, bool] | None:
+    """(type, dots, triplet) writing a length of d divisions, or None."""
+    for t, v in _TYPE_LEN.items():
+        if v == d:
+            return t, 0, False
+        if v * 3 // 2 == d and v % 2 == 0:
+            return t, 1, False
+        if v * 2 // 3 == d and v % 3 == 0:
+            return t, 0, True
+    return None
+
+
+class _Event:
+    """One note, chord or rest of a staff: its elements, voice, place and length."""
+
+    def __init__(self, el, staff: str, voice: str, start: int, dur: int):
+        self.els = [el]
+        self.staff = staff
+        self.voice = voice
+        self.start = start
+        self.dur = dur
+        self.rest = el.find("rest") is not None
+        typ = el.findtext("type")
+        self.base = _TYPE_LEN.get(typ or "")
+        self.dots = len(el.findall("dot"))
+        self.triplet = el.find("time-modification") is not None
+
+
+def _meter_unit(num: int, den: int) -> tuple[int, int]:
+    """(bar, beat) in R_DIV divisions."""
+    bar = num * 4 * R_DIV // den
+    if den == 8 and num % 3 == 0 and num > 3:
+        return bar, 3 * R_DIV // 2
+    if den == 8:
+        return bar, R_DIV // 2
+    if den == 2:
+        return bar, 2 * R_DIV
+    return bar, R_DIV
+
+
+def _place_cost(start: int, d: int, beat: int) -> float:
+    """Where notation lets a note start (R-METER-4/5, R-BEAM-1): a note that starts
+    off the beat does not run past it (except the 8th-quarter-8th figure, half the
+    cost), notes start on the 16th grid (32nds on the 32nd grid), and triplet notes on
+    their own grid."""
+    cost = 0.0
+    off = start % beat
+    if off and off + d > beat:
+        cost += PLACE_COST / 2 if (2 * off == beat and d == beat) else PLACE_COST
+    if d % 8 == 0 and d % 12:
+        grid = d                              # triplet values
+    else:
+        grid = 12 if d >= 12 else 6
+    if start % grid:
+        cost += PLACE_COST
+    return cost
+
+
+def _options(ev: _Event, bar: int, prev: _Event | None = None,
+             nxt: _Event | None = None) -> list[tuple[int, float]]:
+    """(new length, cost) readings of one event. A note whose two neighbours share a
+    value one flag away from its own (an 8th in a run of 16ths) takes their value
+    cheaply: a beamed group's notes are usually all alike (R-BEAM-5)."""
+    out = {ev.dur: 0.0}
+    if ev.rest:
+        for v in _std_lengths(bar):
+            out.setdefault(v, REST_COST)
+        out.setdefault(0, REST_COST)
+        return sorted(out.items())
+    base = ev.base or ev.dur
+    vals = {}
+    for b, c in ((base, 0.0), (base * 2, FLAG_COST), (base // 2, FLAG_COST)):
+        if b < 3:
+            continue
+        for dots, dc in ((0, 0.0 if ev.dots == 0 else DOT_COST), (1, 0.0 if ev.dots == 1 else DOT_COST)):
+            v = b * 3 // 2 if dots else b
+            if ev.triplet:
+                v = v * 2 // 3
+            if 0 < v <= bar:
+                vals[v] = min(vals.get(v, 99.0), c + dc)
+    for v, c in vals.items():
+        out[v] = min(out.get(v, 99.0), c)
+    if (prev is not None and nxt is not None and not prev.rest and not nxt.rest
+            and prev.dur == nxt.dur and prev.dur in (ev.dur * 2, ev.dur // 2) and prev.dur > 0):
+        out[prev.dur] = min(out.get(prev.dur, 99.0), ODD_ONE_COST)
+    out.setdefault(0, DROP_NOTE_COST)
+    return sorted(out.items())
+
+
+def _fit(events: list[_Event], bar: int, beat: int) -> tuple[float, list[int]] | None:
+    """The cheapest new lengths for `events` (in order) that fill `bar` exactly:
+    (cost, lengths), or None."""
+    n = len(events)
+    INF = float("inf")
+    best: list[dict[int, tuple[float, tuple]]] = [dict() for _ in range(n + 1)]
+    best[0][0] = (0.0, ())
+    opts = [_options(e, bar, events[i - 1] if i else None, events[i + 1] if i + 1 < n else None)
+            for i, e in enumerate(events)]
+    for i in range(n):
+        for t, (c0, path) in best[i].items():
+            for v, c in opts[i]:
+                t2 = t + v
+                if t2 > bar:
+                    continue
+                c2 = c0 + c + (_place_cost(t, v, beat) if v else 0.0)
+                if c2 < best[i + 1].get(t2, (INF,))[0]:
+                    best[i + 1][t2] = (c2, path + (v,))
+            # three equal plain notes as a triplet (R-METER-9)
+            if i + 3 <= n and all(not e.rest and not e.triplet and e.dots == 0 and e.base
+                                  and e.base == events[i].base for e in events[i:i + 3]):
+                v = events[i].base * 2 // 3
+                t2 = t + 3 * v
+                if t2 <= bar and events[i].base % 3 == 0:
+                    c2 = c0 + TRIPLET_COST + (0.0 if t % (3 * v) == 0 else PLACE_COST)
+                    if c2 < best[i + 3].get(t2, (INF,))[0]:
+                        best[i + 3][t2] = (c2, path + (-v, -v, -v))
+    got = best[n].get(bar)
+    return None if got is None else (got[0], list(got[1]))
+
+
+def _fit_any(events: list[_Event], bar: int, beat: int) -> tuple[float, list[int]] | None:
+    """_fit, also reading a whole run of fast notes one beam off: every note of a
+    16th or shorter as twice as fast (32nd runs read as 16ths), or as 16th triplets
+    (R-METER-9), at GROUP_COST for the bar."""
+    best = _fit(events, bar, beat)
+    short = [e for e in events if not e.rest and e.base and e.base <= 12 and not e.triplet]
+    if len(short) < 4:
+        return best
+    saved = [(e, e.dur, e.base, e.triplet) for e in short]
+    for scale_num, scale_den, trip in ((1, 2, False), (2, 3, True)):
+        for e in short:
+            e.dur = e.dur * scale_num // scale_den
+            e.base = e.base * scale_num // scale_den if not trip else e.base
+            e.triplet = trip or e.triplet
+        alt = _fit(events, bar, beat)
+        for e, d, b, t in saved:
+            e.dur, e.base, e.triplet = d, b, t
+        if alt is not None and (best is None or alt[0] + GROUP_COST < best[0]):
+            best = (alt[0] + GROUP_COST, alt[1])
+    return best
+
+
+def _apply_length(ev: _Event, v: int) -> None:
+    """Write length v (negative: a triplet of length -v) into the event's elements."""
+    trip = v < 0
+    v = abs(v)
+    ev.dur = v
+    spelled = _spell_length(v)
+    for el in ev.els:
+        el.find("duration").text = str(v)
+        if spelled is None:
+            continue
+        typ, dots, _ = spelled
+        if trip:
+            typ, dots = _LEN_TYPE.get(v * 3 // 2, typ), 0
+        for d in el.findall("dot"):
+            el.remove(d)
+        for tm in el.findall("time-modification"):
+            el.remove(tm)
+        t_el = el.find("type")
+        if t_el is None:
+            t_el = ET.Element("type")
+            dur_el = el.find("duration")
+            el.insert(list(el).index(dur_el) + 1, t_el)
+        t_el.text = typ
+        at = list(el).index(t_el) + 1
+        for _ in range(dots):
+            el.insert(at, ET.Element("dot"))
+            at += 1
+        if trip:
+            tm = ET.Element("time-modification")
+            ET.SubElement(tm, "actual-notes").text = "3"
+            ET.SubElement(tm, "normal-notes").text = "2"
+            el.insert(at, tm)
+    if ev.rest:
+        r = ev.els[0].find("rest")
+        if r is not None and "measure" in r.attrib:
+            del r.attrib["measure"]
+
+
+def _rest_el(staff: str, voice: str, d: int):
+    el = ET.Element("note")
+    ET.SubElement(el, "rest")
+    ET.SubElement(el, "duration").text = str(d)
+    ET.SubElement(el, "voice").text = voice
+    spelled = _spell_length(d)
+    if spelled:
+        ET.SubElement(el, "type").text = spelled[0]
+        for _ in range(spelled[1]):
+            ET.SubElement(el, "dot")
+    ET.SubElement(el, "staff").text = staff
+    return el
+
+
+def _pad(events: list[_Event], bar: int, staff: str, voice: str) -> list[_Event]:
+    """Fallback: cut what runs past the bar, fill a short bar with rests."""
+    out, t = [], 0
+    for ev in events:
+        if t >= bar:
+            break
+        if t + ev.dur > bar:
+            _apply_length(ev, bar - t)
+        out.append(ev)
+        t += ev.dur
+    for v in sorted(_std_lengths(bar), reverse=True):
+        while bar - t >= v and v > 0:
+            out.append(_Event(_rest_el(staff, voice, v), staff, voice, t, v))
+            t += v
+    return out
+
+
+def _place_voice(events: list[_Event], bar: int, staff: str, voice: str) -> list[_Event]:
+    """A second voice as oemer placed it: rests before its notes, cut at the bar."""
+    out, t = [], 0
+    for ev in sorted(events, key=lambda e: e.start):
+        if ev.start >= bar or ev.start < t:
+            continue
+        if ev.start > t:
+            out += _pad([], ev.start - t, staff, voice)
+            t = ev.start
+        if t + ev.dur > bar:
+            _apply_length(ev, bar - t)
+        out.append(ev)
+        t += ev.dur
+    return out
+
+
+def _measure_events(measure, scale: int) -> list[_Event]:
+    """A measure's notes as events in reading order (oemer's backups give each note
+    its place; notes of one staff and voice at the same place are one chord)."""
+    events: list[_Event] = []
+    cursor = 0
+    last_at: dict[tuple[str, str, int], _Event] = {}
+    for el in list(measure):
+        if el.tag in ("backup", "forward"):
+            try:
+                d = int(el.findtext("duration")) * scale
+            except (TypeError, ValueError):
+                d = 0
+            cursor += -d if el.tag == "backup" else d
+            cursor = max(cursor, 0)
+            continue
+        if el.tag != "note" or el.find("grace") is not None:
+            continue
+        try:
+            d = int(el.findtext("duration")) * scale
+        except (TypeError, ValueError):
+            continue
+        staff = el.findtext("staff") or "1"
+        voice = el.findtext("voice") or "1"
+        if el.find("chord") is not None and events:
+            events[-1].els.append(el)
+            continue
+        key = (staff, voice, cursor)
+        prev = last_at.get(key)
+        if prev is not None and not prev.rest and el.find("rest") is None:
+            if el.find("chord") is None:
+                el.insert(0, ET.Element("chord"))
+            prev.els.append(el)
+            cursor += d
+            continue
+        if prev is not None and el.find("rest") is not None:
+            cursor += d                       # a rest under a note at the same place: oemer's filler
+            continue
+        ev = _Event(el, staff, voice, cursor, d)
+        events.append(ev)
+        last_at[key] = ev
+        cursor += d
+    return events
+
+
+def _clefs(root) -> dict[str, str]:
+    out = {}
+    for c in root.iter("clef"):
+        out.setdefault(c.get("number") or "1", c.findtext("sign") or "")
+    return out
+
+
+_STEPS = "CDEFGAB"
+
+
+def _step_index(el) -> int | None:
+    p = el.find("pitch")
+    if p is None:
+        return None
+    try:
+        return int(p.findtext("octave")) * 7 + _STEPS.index(p.findtext("step"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _set_step_index(el, idx: int, key_alter: dict[str, int]) -> None:
+    p = el.find("pitch")
+    step = _STEPS[idx % 7]
+    p.find("step").text = step
+    p.find("octave").text = str(idx // 7)
+    alter = p.find("alter")
+    if alter is not None:
+        alter.text = str(key_alter.get(step, 0))
+
+
+def _key_alters(fifths: int) -> dict[str, int]:
+    sharps, flats = "FCGDAEB", "BEADGCF"
+    if fifths > 0:
+        return {s: 1 for s in sharps[:fifths]}
+    return {s: -1 for s in flats[:-fifths]}
+
+
+LOW_IN_TREBLE = 3 * 7 + 5       # A3 (two ledger lines below the treble staff) and lower
+STAFF_GAP_STEPS = 8             # treble-staff step -> bass-staff step for a note between the staves
+
+
+def _restaff(measure, key_alter: dict[str, int]) -> int:
+    """Notes far below the treble staff of a piano score go to the bass staff
+    (R-PAGE-2): read against the wrong staff, a note above the bass staff comes out
+    as G3 or lower in the treble. A chord moves only if all its notes are that low.
+    Returns how many notes moved."""
+    chords: list[list] = []
+    for el in measure:
+        if el.tag != "note" or el.find("rest") is not None:
+            continue
+        if el.find("chord") is not None and chords:
+            chords[-1].append(el)
+        else:
+            chords.append([el])
+    moved = 0
+    for ch in chords:
+        if any((el.findtext("staff") or "1") != "1" for el in ch):
+            continue
+        idx = [_step_index(el) for el in ch]
+        if any(i is None or i > LOW_IN_TREBLE for i in idx):
+            continue
+        for el, i in zip(ch, idx):
+            _set_step_index(el, i + STAFF_GAP_STEPS, key_alter)
+            st = el.find("staff")
+            if st is None:
+                st = ET.SubElement(el, "staff")
+            st.text = "2"
+            moved += 1
+    return moved
+
+
+def _voices(events: list[_Event]) -> dict[tuple[str, str], list[_Event]]:
+    out: dict[tuple[str, str], list[_Event]] = {}
+    for ev in events:
+        out.setdefault((ev.staff, ev.voice), []).append(ev)
+    return out
+
+
+def _bar_cost(groups, bar: int, beat: int, edge: bool = False) -> float:
+    """What it costs to make every staff's first voice fill `bar` (an `edge` bar, the
+    first or last, may also be short: a pickup, a short last bar)."""
+    cost = 0.0
+    for (staff, voice), evs in groups.items():
+        if voice != min(v for s, v in groups if s == staff):
+            continue
+        total = sum(e.dur for e in evs)
+        if total == bar:
+            cost -= EXACT_BONUS                       # already adds up: evidence for this meter
+            continue
+        if edge and total < bar:
+            continue
+        fit = _fit(evs, bar, beat)
+        cost += MAX_FIX if fit is None else min(fit[0], MAX_FIX)
+        if sum(e.dur for e in evs) < bar:
+            cost += SHORT_READ_COST               # oemer over-reads lengths far more than it under-reads
+    return cost
+
+
+def repair_rhythm(xml: Path) -> dict:
+    """Put an OMR score's rhythm right in place (see the notes above). Returns what
+    was done: {"meter": "3/8", "bars": bars, "fixed": staff-bars repaired, "padded":
+    short ones filled with rests, "left": overfull ones beyond repair (every note
+    kept), "moved": notes moved to the bass staff}."""
+    tree = ET.parse(xml)
+    root = tree.getroot()
+    part = root.find("part")
+    if part is None:
+        return {}
+    measures = part.findall("measure")
+    if not measures:
+        return {}
+    old_div = int(root.findtext(".//divisions") or 1)
+    durs = list(root.iter("duration"))
+    try:
+        values = [int(d.text) * R_DIV for d in durs]
+    except (TypeError, ValueError):
+        return {}
+    if any(v % old_div for v in values):
+        return {}                                 # lengths finer than the repair's grid: left alone
+    for d, v in zip(durs, values):
+        d.text = str(v // old_div)
+    for d in root.iter("divisions"):
+        d.text = str(R_DIV)
+    keys_fixed = _key_consistency(measures)
+    fifths = int(root.findtext(".//key/fifths") or 0)
+    key_alter = _key_alters(fifths)
+
+    clefs = _clefs(root)
+    moved = 0
+    if clefs.get("1") == "G" and clefs.get("2") == "F":
+        moved = sum(_restaff(m, key_alter) for m in measures)
+    groups = [_voices(_measure_events(m, 1)) for m in measures]
+
+    # the time signature that needs the fewest repairs (first and last bar left out)
+    t_el = root.find(".//time")
+    cur = (int(t_el.findtext("beats")), int(t_el.findtext("beat-type"))) if t_el is not None else None
+    inner = groups[1:-1] if len(groups) > 2 else groups      # oemer's first and last bars are the least sure
+    best, best_cost = cur, float("inf")
+    for num, den in REPAIR_METERS:
+        bar, beat = _meter_unit(num, den)
+        c = sum(_bar_cost(g, bar, beat) for g in inner) + METER_PRIOR.get((num, den), 1.0)
+        if (num, den) == cur:
+            c -= 0.25
+        if c < best_cost:
+            best, best_cost = (num, den), c
+    if best is None:
+        best = (4, 4)
+    num, den = best
+    bar, beat = _meter_unit(num, den)
+    if t_el is None:
+        first = measures[0]
+        attrs = first.find("attributes")
+        if attrs is None:
+            attrs = ET.Element("attributes")
+            first.insert(0, attrs)
+        t_el = ET.Element("time")
+        ET.SubElement(t_el, "beats")
+        ET.SubElement(t_el, "beat-type")
+        at = len([c for c in attrs if c.tag in ("footnote", "level", "divisions", "key")])
+        attrs.insert(at, t_el)
+    t_el.find("beats").text = str(num)
+    t_el.find("beat-type").text = str(den)
+
+    fixed = padded = left = 0
+    for k, (m, g) in enumerate(zip(measures, groups)):
+        edge = k == 0 or k == len(measures) - 1
+        new_groups = {}
+        firsts = {}
+        for staff, voice in sorted(g):
+            firsts.setdefault(staff, voice)
+        for (staff, voice), evs in sorted(g.items()):
+            if firsts[staff] != voice:                    # another voice: kept where it was
+                new_groups[(staff, voice)] = _place_voice(evs, bar, staff, voice)
+                continue
+            total = sum(e.dur for e in evs)
+            if total == bar or (edge and total < bar):
+                new_groups[(staff, voice)] = evs          # right, or a pickup / short last bar
+                continue
+            fit = _fit_any(evs, bar, beat)
+            if fit is not None and fit[0] <= MAX_REPAIR:
+                keep = []
+                for ev, v in zip(evs, fit[1]):
+                    if v == 0:
+                        continue
+                    if v != ev.dur or (v < 0 and not ev.triplet):
+                        _apply_length(ev, v)
+                    keep.append(ev)
+                new_groups[(staff, voice)] = keep
+                fixed += 1
+            elif total < bar:
+                new_groups[(staff, voice)] = _pad(evs, bar, staff, voice)
+                padded += 1
+            else:
+                new_groups[(staff, voice)] = evs          # too much to repair: every note kept
+                left += 1
+        for evs in new_groups.values():
+            for ev in evs:
+                if ev.rest:
+                    _tidy_rest(ev, bar)
+        _rewrite_measure(m, new_groups)
+    tree.write(xml, encoding="UTF-8", xml_declaration=True)
+    return {"meter": f"{num}/{den}", "bars": len(measures), "fixed": fixed, "padded": padded,
+            "left": left, "moved": moved, "keys": keys_fixed}
+
+
+def _key_consistency(measures) -> int:
+    """oemer reads the key signature again on every system, and now and then one
+    system's comes out one sharp or flat off (5 flats among 4). A key that differs from
+    the one most of the bars are in by a single accidental, for fewer bars, is that
+    misreading (R-ACC-9): it goes back, and its notes that took the extra (or missing)
+    accidental from it are given the key's own. Returns how many bars were set right."""
+    spans: list[list] = []                        # [fifths, first bar, [key elements]]
+    for k, m in enumerate(measures):
+        for key in m.iter("key"):
+            try:
+                f = int(key.findtext("fifths"))
+            except (TypeError, ValueError):
+                continue
+            if spans and spans[-1][0] == f:
+                spans[-1][2].append(key)
+            else:
+                spans.append([f, k, [key]])
+    if len(spans) < 2:
+        return 0
+    bars: dict[int, int] = {}
+    for i, (f, start, _) in enumerate(spans):
+        end = spans[i + 1][1] if i + 1 < len(spans) else len(measures)
+        bars[f] = bars.get(f, 0) + end - start
+    main = max(bars, key=lambda f: (bars[f], f == spans[0][0]))
+    fixed = 0
+    good, bad_map = _key_alters(main), None
+    for i, (f, start, keys) in enumerate(spans):
+        if f == main or abs(f - main) != 1 or bars[f] >= bars[main]:
+            continue
+        bad_map = _key_alters(f)
+        end = spans[i + 1][1] if i + 1 < len(spans) else len(measures)
+        for key in keys:
+            key.find("fifths").text = str(main)
+        for m in measures[start:end]:
+            for p in m.iter("pitch"):
+                step, alter = p.findtext("step"), p.find("alter")
+                if alter is None or bad_map.get(step, 0) == good.get(step, 0):
+                    continue
+                if int(alter.text or 0) == bad_map.get(step, 0):
+                    alter.text = str(good.get(step, 0))
+            fixed += 1
+    return fixed
+
+
+def _tidy_rest(ev: _Event, bar: int) -> None:
+    """oemer writes every rest as a whole-bar rest (measure="yes") with no type, which
+    readers stretch to the whole bar: only a rest that fills the bar keeps that; the
+    others get their written value (R-REST-1)."""
+    el = ev.els[0]
+    r = el.find("rest")
+    if ev.dur == bar:
+        r.set("measure", "yes")
+        return
+    if "measure" in r.attrib:
+        del r.attrib["measure"]
+    if el.find("type") is None:
+        spelled = _spell_length(ev.dur)
+        if spelled:
+            t_el = ET.Element("type")
+            t_el.text = spelled[0]
+            at = list(el).index(el.find("duration")) + 1
+            el.insert(at, t_el)
+            for _ in range(spelled[1]):
+                el.insert(at + 1, ET.Element("dot"))
+
+
+def _rewrite_measure(m, groups: dict[tuple[str, str], list[_Event]]) -> None:
+    """The measure's notes again: each staff's voices one after another, a backup
+    between them (no more note-by-note interleaving)."""
+    head = [el for el in m if el.tag not in ("note", "backup", "forward", "barline")]
+    barlines = [el for el in m if el.tag == "barline"]
+    for el in list(m):
+        m.remove(el)
+    for el in head:
+        if el.tag != "barline":
+            m.append(el)
+    left = [b for b in barlines if b.get("location") == "left"]
+    right = [b for b in barlines if b.get("location") != "left"]
+    for b in left:
+        m.insert(0, b)
+    blocks = [(key, evs) for key, evs in sorted(groups.items()) if evs]
+    for i, (key, evs) in enumerate(blocks):
+        total = 0
+        for ev in evs:
+            for el in ev.els:
+                m.append(el)
+            total += ev.dur
+        if i + 1 < len(blocks) and total:
+            back = ET.SubElement(m, "backup")
+            ET.SubElement(back, "duration").text = str(total)
+    for b in right:
+        m.append(b)

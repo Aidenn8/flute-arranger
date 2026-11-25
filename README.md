@@ -116,7 +116,7 @@ On macOS 14 the models run on the CPU (the Apple GPU path crashes there), so a 4
 5. **Fit it to the flute**: one octave move for the whole piece, then whole phrases moved where needed, never single notes.
 6. **Write the rhythm**: each beat is read as the most likely printed figure (two 8ths, dotted 8th + 16th, a 16th run, ...) given where the notes were played, learning the piece's own common figures; triplets only where the piece really uses them; notes held through short gaps; breath marks in long phrases.
 7. **Piano part**: one chord per beat at most, chosen across the whole piece at once (dynamic programming): chords that contain the tune's strong-beat notes, belong to the key, move the way real progressions do (ii–V–I, cadences at phrase ends), with 7th chords and the real bass note (inversions included). A tune with no accompaniment is harmonized. Voiced below the flute, never above it.
-8. **Engrave** with Verovio, and play a preview with a soundfont.
+8. **Engrave** with Verovio, and play a preview with a soundfont. The writing follows the rules in `docs/notation_rules.md` (from Gould's *Behind Bars*, Stone and the usual theory texts): every beat visible, beams per meter, pickup bars, courtesy accidentals, a breath at least every 10 seconds. The song page's **Notation check** line says whether the score follows them, or names the bars that don't.
 
 Code: `sheetswap/` (one file per step), web page in `sheetswap/web/`, tests in `tests/` (`.venv/bin/python -m pytest`; `-m slow` runs the model tests), measurements in `bench/`.
 

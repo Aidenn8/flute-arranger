@@ -36,7 +36,10 @@ sung line, which the violin plays). Then:
    (the length, and which way of unfolding the repeats matches the transcribed notes
    best; `--show` and the comments in `make_refs.py` say what was chosen).
 4. Hand fixes, all in `PIECES` in `make_refs.py`: Satie's chords-only intro left out and
-   a long tied F#4 rejoined (the chords strike the same key, which cuts the MIDI note).
+   a long tied F#4 rejoined (the chords strike the same key, which cuts the MIDI note);
+   in Moonlight the right hand's 8th-triplets (the accompaniment, written in the same
+   staff as the tune) are left out by their note value (`drop_len`), which leaves
+   Beethoven's separate top voice.
 
 The first bars of every reference were read against the LilyPond source by hand.
 
@@ -54,6 +57,14 @@ The first bars of every reference were read against the LilyPond source by hand.
 | `allemanda_bwv1004` | violin solo | [Bach Partita 2 - Allemanda (2013)](https://commons.wikimedia.org/wiki/File:Bach_Partita_2_-_Allemanda_-_18-04-2013.ogg), QMUL | CC0 | 182 s | [BWV 1004, Allemanda](https://www.mutopiaproject.org/ftp/BachJS/BWV1004/bwv-1004_1/) | CC BY-SA 3.0 | no repeats |
 | `schubert_ave_maria` | violin + piano | [Ave Maria arr. violin and piano, Menuhin / Baller (1948 film)](https://commons.wikimedia.org/wiki/File:Schubert_-_Ave_Maria,_arr._for_violin_and_piano_(Menuhin,_Baller).flac) | public domain | 263 s | [D. 839](https://www.mutopiaproject.org/ftp/SchubertF/D839/SchubertF-D839_AveMaria/) (voice + piano), after Peters | public domain | all three verses |
 | `air_bwv1068` | strings (1st violins) | [Air, Air Force Strings (2000)](https://commons.wikimedia.org/wiki/File:Air_-_Air_Force_Strings_-_United_States_Air_Force_Band.mp3), US government work | public domain | 183 s | [BWV 1068, Air (orchestra)](https://www.mutopiaproject.org/ftp/BachJS/BWV1068/bach-air/), after Bach-Gesellschaft | CC BY-SA 3.0 | both halves repeated |
+| `chopin_prelude_4` | piano | [Prelude Op. 28 No. 4, Ivan Ilić](https://commons.wikimedia.org/wiki/File:Ivan_Ili%C4%87-Chopin_Prelude_Opus_28_n.4.ogg) (from IMSLP) | CC BY 3.0 | 110 s | [Op. 28 No. 4](https://www.mutopiaproject.org/ftp/ChopinFF/O28/Chop-28-4/), after Peters 1879 | public domain | as written |
+| `chopin_prelude_7` | piano | [Prelude No. 7, Ivan Ilić](https://commons.wikimedia.org/wiki/File:Ivan_Ili%C4%87-Chopin_-_Prelude_no._7_in_A_major.ogg) (from IMSLP) | CC BY-SA 3.0 | 38 s | [Op. 28 No. 7](https://www.mutopiaproject.org/ftp/ChopinFF/O28/Chop-28-7/), after Peters | public domain | as written |
+| `chopin_prelude_20` | piano | [Preludes Op. 28 No. 20, Musopen](https://commons.wikimedia.org/wiki/File:Chopin_-_Preludes,_Op._28_-_No._20_%27Funeral_march%27.ogg) | CC BY 3.0 | 91 s | [Op. 28 No. 20](https://www.mutopiaproject.org/ftp/ChopinFF/O28/Chop-28-20/), after Peters | public domain | as written |
+| `chopin_waltz_69_2` | piano | [Waltz Op. 69 No. 2, Olga Gurevich](https://commons.wikimedia.org/wiki/File:Chopin_-_Waltz_No._10_in_B_minor,_Op._69_No._2_(Olga_Gurevich).flac) (Musopen) | public domain | 216 s | [Op. 69 No. 2](https://www.mutopiaproject.org/ftp/ChopinFF/O69/w10-h-moll-cfi/), after Peters (Scholtz) | public domain | B section repeated |
+| `kinderszenen_1` | piano | [Scenes from Childhood, No. 1](https://commons.wikimedia.org/wiki/File:Robert_Schumann_-_scenes_from_childhood,_op._15_-_i._of_foreign_lands_and_peoples.ogg), Musopen | public domain | 112 s | [Op. 15 No. 1](https://www.mutopiaproject.org/ftp/SchumannR/O15/SchumannOp15No01/), after "Leichte Stücke" 1900 | public domain | both halves repeated |
+| `mozart_k545_1` | piano | [Sonata K. 545, i. Allegro](https://commons.wikimedia.org/wiki/File:Wolfgang_Amadeus_Mozart_-_sonata_no._16_in_c_major,_k.545_%27sonata_facile%27_-_i._allegro.ogg), Musopen | public domain | 134 s | [K. 545, i](https://www.mutopiaproject.org/ftp/MozartWA/KV545/K545-1/) | CC BY-SA 3.0 | no repeats |
+| `moonlight_1` | piano | [Sonata Op. 27 No. 2, i, Paul Pitman](https://commons.wikimedia.org/wiki/File:Ludwig_van_Beethoven_-_sonata_no._14_in_c_sharp_minor_%27moonlight%27,_op._27_no._2_-_i._adagio_sostenuto.ogg) (Musopen) | public domain | 336 s | [Op. 27 No. 2](https://www.mutopiaproject.org/ftp/BeethovenLv/O27/moonlight/), after Berners 1908 (ed. Winterberger) | CC BY-SA 2.5 | as written |
+| `brahms_waltz_15` | piano | [Waltz Op. 39 No. 15, Martha Goldstein](https://commons.wikimedia.org/wiki/File:Brahms-waltz15.ogg) | CC BY-SA 2.0 | 88 s | [Op. 39 No. 15](https://www.mutopiaproject.org/ftp/BrahmsJ/O39/waltz-op39-15/), ed. R. Joseffy | public domain | as written (the edition writes its repeats out) |
 
 Notes per piece:
 
@@ -75,6 +86,26 @@ Notes per piece:
 - **Schubert**: Menuhin plays the sung line; the score's voice part (three verses, in
   the MIDI after one quarter of silence) is the reference.
 - **Air**: the recording is a string orchestra; the tune is the first violins.
+- **The eight piano pieces added later** (2/2, 2/4, 3/4, 4/4; melody in chords, over
+  triplets, in a waltz, over an Alberti bass) were chosen to widen the judge for piano
+  recordings. Each repeat form was chosen as the best match of the ways to play it (DP
+  alignment of the reference's pitch classes against the transcribed tune, and the
+  tempo that implies): Kinderszenen 1 with both halves repeated (48 quarters a minute;
+  without repeats it would be 24), the B-minor waltz with its B section played twice
+  (149 quarters a minute against the edition's 152; as written 123), K. 545 without
+  the repeats (with the exposition repeated the match is far worse).
+- **Chopin Prelude No. 4**: the right hand from the edition's pickup (B3 dotted 8th, B4
+  16th); the closing chords' top notes are the tune.
+- **Chopin Prelude No. 7**: the tune is the top of the right hand's chords; the edition
+  ships its MIDI file next to a zip of LilyPond files (both are read).
+- **Chopin Prelude No. 20**: the top line of the right hand's chords. Commons' other
+  file of this prelude ("Prelude no. 20 op. 28 c minor.ogg") is a MIDI file played by a
+  soundfont, not a performance, so the Musopen recording is used.
+- **Moonlight**: the tune is Beethoven's separate top voice (bars 5 on; LilyPond's
+  `topmain`); the right hand's 8th-triplets are left out (see hand fixes). Where the
+  tune rests (bars 1-4, much of the middle section) the reference has no notes.
+- **Brahms Op. 39 No. 15**: the top line of the right hand; in the closing bars that
+  includes the right hand's triplet figures under the held tune note.
 
 Searched but not used: Massenet's Méditation, Elgar's Salut d'amour, Dvořák's
 Humoresque, Monti's Czárdás and Gluck's "Melody" have free recordings on Commons
@@ -84,7 +115,7 @@ Archive 78s found are sung with a violin obbligato, or from 1930 and later).
 
 ## Flute arrangements
 
-Only one of the ten has a machine-readable published flute arrangement: Mutopia's
+Only one of the eighteen has a machine-readable published flute arrangement: Mutopia's
 **Air from BWV 1068 for flute and guitar** (public domain, "new adaptation from
 Bach-Gesellschaft"), in `air_bwv1068/flute/`, as `ref_flute.json`. Mutopia's whole
 flute list (51 pieces) has nothing else from this set; KernScores and the music21

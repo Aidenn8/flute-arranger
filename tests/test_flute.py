@@ -124,3 +124,50 @@ def test_phrase_edge_slips_fixed_but_octave_leap_kept():
     assert first % 12 == 95 % 12 and abs(first - second) <= 12   # B, now near the G#
     out, _ = fit_to_flute(line([72, 84, 83, 79, 77]))     # C5 C6: an octave leap stays
     assert [n.pitch for n in out][:2] == [72, 84]
+
+
+# ---------------------------------------------------------------- polish for parts read from a score
+# "reference and take note of music theory so that the sheet music incorporates how
+# music is written": the flute's registers (R-FLUTE-1/2) and fast leaps (R-FLUTE-5).
+
+def test_phrase_in_the_weak_low_register_moves_up_whole():
+    from sheetswap.flute import phrase_octaves
+    high = _line([72, 74, 76, 77, 79, 77, 76, 74], dur=12)                 # C5-G5: fine
+    low = _line([60, 62, 64, 65, 64, 62, 60, 62] * 2, dur=12, start=144)    # C4-F4, two bars
+    end = _line([76, 74, 72, 74, 76, 79, 77, 76], dur=12, start=384)
+    out, moved = phrase_octaves(high + low + end, [], 12, 48)
+    assert moved == 1
+    assert [n.pitch for n in out[:8]] == [n.pitch for n in high]
+    assert [n.pitch for n in out[8:24]] == [n.pitch + 12 for n in low]     # whole phrase, intervals kept
+    assert [n.pitch for n in out[24:]] == [n.pitch for n in end]
+
+
+def test_short_low_dip_stays_but_a_loud_one_moves():
+    from sheetswap.flute import phrase_octaves
+    tune = _line([74, 76, 77, 79], start=0) + _line([67, 69, 67, 69], start=60) \
+        + _line([79, 77, 76, 74], start=120)
+    out, moved = phrase_octaves(tune, [], 12, 48)
+    assert moved == 0                                     # G4-A4 for a bar: not worth an octave jump
+    low = _line([62, 64, 65, 64, 62, 64, 65, 67], start=0)                  # D4-G4, two bars
+    _, quiet = phrase_octaves(low, [(0, "p")], 12, 48)
+    out, loud = phrase_octaves(low, [(0, "ff")], 12, 48)
+    assert loud == 1 and out[0].pitch == 74               # ff below G4 is hardly possible (R-FLUTE-2)
+    assert quiet in (0, 1)
+
+
+def test_phrase_that_would_leave_the_range_stays():
+    from sheetswap.flute import phrase_octaves
+    line = _line([60, 62, 64, 86, 88, 89], start=0)       # C4 ... F6: up an octave is past C7
+    out, moved = phrase_octaves(line, [], 12, 48)
+    assert moved == 0 and [n.pitch for n in out] == [n.pitch for n in line]
+
+
+def test_fast_wide_leaps_become_a_playable_outline():
+    from sheetswap.flute import outline_leaps
+    run = _line([72, 91, 76, 72, 93, 88], dur=3)          # 16ths leaping a 12th and more
+    out, moved = outline_leaps(run, 6)
+    assert moved == 2
+    assert [n.pitch % 12 for n in out] == [p % 12 for p in [72, 91, 76, 72, 93, 88]]
+    assert all(abs(b.pitch - a.pitch) <= 12 for a, b in zip(out, out[1:]))
+    slow = _line([72, 91, 76], dur=12)                    # quarters: a leap a flutist can take
+    assert outline_leaps(slow, 6) == (slow, 0)

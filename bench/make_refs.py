@@ -46,7 +46,7 @@ MAX_SCORE_BYTES = 5 * 1024 * 1024
 # ---------------------------------------------------------------- the pieces
 # rec: ("real", <folder in samples/real>) or ("commons", <File: title>)
 # score / flute: Mutopia ftp path without extension (".mid" + ".ly"), or a
-#   ("zip", <path to -mids.zip>, <path to -lys.zip>) pair for multi-file pieces.
+#   ("zip", <path to -mids.zip or .mid>, <path to -lys.zip>) pair for multi-file pieces.
 # kind: what a user would pick on the upload page ("piano" = solo piano,
 #   "ensemble" = piano/other instruments, no singing or drums).
 
@@ -126,6 +126,57 @@ PIECES: dict[str, dict] = {
                  form=[(0, 24), (0, 20), (24, 28), (28, None), (28, None)]),
         ref_flute=dict(file="bach_air_bmv_1068.mid", instrument="flute", meter=(4, 4), key="D major",
                        form=[(0, 24), (0, 20), (24, 28), (28, None), (28, None)])),
+    # ---- more solo piano (added to widen the judge: melody in chords, over triplets,
+    # dotted rhythms, waltzes, Alberti bass, a slow alla breve)
+    "chopin_prelude_4": dict(
+        instrument="piano", kind="piano", title="Chopin: Prelude in E minor, Op. 28 No. 4",
+        rec=("commons", "File:Ivan Ilić-Chopin Prelude Opus 28 n.4.ogg"),
+        score="ChopinFF/O28/Chop-28-4/Chop-28-4",
+        ref=dict(meter=(2, 2), key="E minor", tempo_text="Largo", pickup=1.0)),
+    "chopin_prelude_7": dict(
+        instrument="piano", kind="piano", title="Chopin: Prelude in A major, Op. 28 No. 7",
+        rec=("commons", "File:Ivan Ilić-Chopin - Prelude no. 7 in A major.ogg"),
+        score=("zip", "ChopinFF/O28/Chop-28-7/Chop-28-7.mid", "ChopinFF/O28/Chop-28-7/Chop-28-7-lys.zip"),
+        ref=dict(meter=(3, 4), key="A major", tempo_text="Andantino", pickup=1.0)),
+    "chopin_prelude_20": dict(
+        instrument="piano", kind="piano", title="Chopin: Prelude in C minor, Op. 28 No. 20",
+        # Musopen's recording; Commons' "Prelude no. 20 op. 28 c minor.ogg" is a MIDI file
+        # played by a soundfont, not a performance
+        rec=("commons", "File:Chopin - Preludes, Op. 28 - No. 20 'Funeral march'.ogg"),
+        score="ChopinFF/O28/Chop-28-20/Chop-28-20",
+        ref=dict(meter=(4, 4), key="C minor", tempo_text="Largo")),
+    "chopin_waltz_69_2": dict(
+        instrument="piano", kind="piano", title="Chopin: Waltz in B minor, Op. 69 No. 2",
+        rec=("commons", "File:Chopin - Waltz No. 10 in B minor, Op. 69 No. 2 (Olga Gurevich).flac"),
+        score="ChopinFF/O69/w10-h-moll-cfi/w10-h-moll-cfi",
+        # A (bars 1-32), B (33-64) played twice with its two endings, Trio, A again
+        # (the best match of the two ways; 149 quarters a minute against the edition's 152)
+        ref=dict(meter=(3, 4), key="B minor", tempo_text="Moderato", pickup=1.0,
+                 form=[(0, 193), (97, 190), (193, None)])),
+    "kinderszenen_1": dict(
+        instrument="piano", kind="piano", title="Schumann: Von fremden Ländern und Menschen, Op. 15 No. 1",
+        rec=("commons", "File:Robert Schumann - scenes from childhood, op. 15 - i. of foreign lands and peoples.ogg"),
+        score="SchumannR/O15/SchumannOp15No01/SchumannOp15No01",
+        # both halves repeated (bars 1-8, 9-22): the best match of the four ways to play it
+        ref=dict(meter=(2, 4), key="G major", pickup=1.0,
+                 form=[(0, 17), (1, 17), (17, None), (17, None)])),
+    "mozart_k545_1": dict(
+        instrument="piano", kind="piano", title="Mozart: Piano Sonata in C, K. 545, I. Allegro",
+        rec=("commons", "File:Wolfgang Amadeus Mozart - sonata no. 16 in c major, k.545 'sonata facile' - i. allegro.ogg"),
+        score="MozartWA/KV545/K545-1/K545-1",
+        # played without the repeats (134 s; with the exposition repeated the match is far worse)
+        ref=dict(meter=(4, 4), key="C major", tempo_text="Allegro")),
+    "moonlight_1": dict(
+        instrument="piano", kind="piano", title="Beethoven: Sonata Op. 27 No. 2 ('Moonlight'), I. Adagio sostenuto",
+        rec=("commons", "File:Ludwig van Beethoven - sonata no. 14 in c sharp minor 'moonlight', op. 27 no. 2 - i. adagio sostenuto.ogg"),
+        score=("zip", "BeethovenLv/O27/moonlight/moonlight-mids.zip", "BeethovenLv/O27/moonlight/moonlight-lys.zip"),
+        ref=dict(file="moonlight1.mid", meter=(2, 2), key="C-sharp minor", tempo_text="Adagio sostenuto",
+                 drop_len=[1 / 3])),
+    "brahms_waltz_15": dict(
+        instrument="piano", kind="piano", title="Brahms: Waltz in A-flat, Op. 39 No. 15",
+        rec=("commons", "File:Brahms-waltz15.ogg"),
+        score="BrahmsJ/O39/waltz-op39-15/waltz-op39-15",
+        ref=dict(meter=(3, 4), key="A-flat major")),
 }
 
 
@@ -147,6 +198,11 @@ def fetch_mutopia(s, spec, folder: Path) -> None:
     if isinstance(spec, tuple):
         for zpath in spec[1:]:
             data = _get_small(s, MUTOPIA + zpath)
+            if zpath.endswith((".mid", ".ly")):          # a plain file next to a zip of the others
+                (folder / Path(zpath).name).write_bytes(data)
+                files.append(Path(zpath).name)
+                time.sleep(1.0)
+                continue
             with zipfile.ZipFile(io.BytesIO(data)) as z:
                 for info in z.infolist():
                     name = Path(info.filename).name          # flat: never a path from the zip
@@ -328,6 +384,11 @@ def build_ref(slug: str, spec: dict, folder: str = "score", key: str = "ref") ->
     notes, graces = split_graces(notes)
     for a, b in cfg.get("drop", []):
         notes = [r for r in notes if not (a - 1e-6 <= r[1] < b - 1e-6)]
+    for length in cfg.get("drop_len", []):
+        # an accompaniment voice in the tune's staff, told apart by its note value
+        # (Moonlight: every 8th-triplet of the right hand is accompaniment)
+        # (LilyPond rounds tuplet lengths down by a MIDI tick or two)
+        notes = [r for r in notes if abs(r[2] - r[1] - length) > 0.01]
     line = skyline(notes)
     close_grace_gaps(line, graces)
     for a, b in cfg.get("join", []):

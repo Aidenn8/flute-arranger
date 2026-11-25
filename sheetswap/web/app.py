@@ -325,6 +325,18 @@ def _arrange(d: Path, opts: ArrangeOptions) -> dict:
         return _pipeline().arrange_and_render(d, opts)
 
 
+def _notation_check(result: dict) -> dict | None:
+    """The page's "Notation check" line: the summary of how the score follows
+    docs/notation_rules.md, kept next to the score (notation.json)."""
+    xml = result.get("musicxml")
+    if not xml:
+        return None
+    from ..notation import report_for
+    with _arrange_lock:
+        rep = report_for(Path(xml).parent, result.get("arr"))
+    return (rep or {}).get("summary")
+
+
 def _scalable(svg: str) -> str:
     """Give Verovio's outer <svg> a viewBox so CSS can shrink it to the paper."""
     m = re.search(r"<svg\b[^>]*>", svg)
@@ -563,6 +575,7 @@ def song(song_id: str):
         svgs=list(result.get("svgs") or []),
         warnings=list(result.get("warnings") or []),
         facts=facts,
+        notation=_notation_check(result),
         preview_url=_file_url(song_id, d, result.get("mp3")),
         original_url=original_url,
         original_is_midi=ext in MIDI_TYPES,

@@ -282,6 +282,142 @@ def test_auto_prefers_a_solo_line_over_the_piano():
     assert score_input.auto_part([cello]) == 0                          # nothing else to take
 
 
+# ---------------------------------------------------------------- the tune of a piano part
+# "work more on converting piano music input to flute sheet music --> improve the accuracy
+# and rhythm": the tune is followed through both hands (score_input.find_tune).
+
+# Schumann's "Happy Farmer" texture, 4/4: right-hand after-beat chords over a left-hand
+# tune for two bars, then the tune moves up into the right hand over left-hand chords.
+FARMER_LH = [("F3", 1.5), ("A3", 0.5), ("C4", 1.5), ("F3", 0.5),
+             ("Bb3", 0.5), ("D4", 0.5), ("F4", 0.5), ("D4", 0.5), ("C4", 2.0)]
+FARMER_RH = [("Bb4", 1.5), ("A4", 0.5), ("G4", 1.5), ("C5", 0.5),
+             ("F4", 1.5), ("A4", 0.5), ("C5", 2.0)]
+
+
+def _farmer_score(path):
+    from music21 import chord, instrument, layout, meter, note
+    sc = stream.Score()
+    rh, lh = stream.PartStaff(id="P1-Staff1"), stream.PartStaff(id="P1-Staff2")
+    rh.insert(0, instrument.Piano())
+    for st in (rh, lh):
+        st.append(meter.TimeSignature("4/4"))
+    for top in (["C4", "F4", "A4"], ["D4", "F4", "Bb4"]):        # bars 1-2: chords after the beat
+        for _ in range(2):
+            rh.append(note.Rest(quarterLength=0.5))
+            rh.append(chord.Chord(top, quarterLength=0.5))
+            rh.append(chord.Chord(top, quarterLength=0.5))
+            rh.append(note.Rest(quarterLength=0.5))
+    for name, q in FARMER_LH:
+        lh.append(note.Note(name, quarterLength=q))
+    for name, q in FARMER_RH:                                     # bars 3-4: the tune up top
+        rh.append(note.Note(name, quarterLength=q))
+    for low in (["C3", "E3", "G3"], ["F2", "C3", "A3"]):
+        for _ in range(4):
+            lh.append(chord.Chord(low, quarterLength=1.0))
+    sc.insert(0, rh)
+    sc.insert(0, lh)
+    sc.insert(0, layout.StaffGroup([rh, lh], symbol="brace"))
+    sc.write("musicxml", fp=str(path))
+    return path
+
+
+def _ticks(seq, start=0):
+    out, t = [], start
+    for name, q in seq:
+        out.append((pretty_midi.note_name_to_number(name), t, int(q * 12)))
+        t += int(q * 12)
+    return out
+
+
+def test_piano_tune_follows_the_left_hand_and_back(tmp_path):
+    src = score_input.load_score(_farmer_score(tmp_path / "farmer.musicxml"))
+    names = [p.name for p in src.parts]
+    assert names == ["Piano, right hand", "Piano, left hand", "Piano, the tune"]
+    assert src.auto_part == 2 and src.parts[2].tune and src.parts[2].keyboard
+    want = _ticks(FARMER_LH) + _ticks(FARMER_RH, start=96)
+    assert _rows(src.parts[2].melody) == want
+    # the hands are still there to choose, and the page lists the tune first
+    assert _rows(src.parts[0].melody)[:2] == [(69, 6, 6), (69, 12, 6)]
+    back = score_input.ScoreSource.from_dict(json.loads(json.dumps(src.to_dict())))
+    assert back.parts[2].tune and back.auto_part == 2
+
+
+def test_piano_tune_from_a_midi_file_with_one_track_a_hand(tmp_path):
+    pm = pretty_midi.PrettyMIDI(resolution=480)
+    pm.time_signature_changes.append(pretty_midi.TimeSignature(4, 4, 0))
+    q = 0.5                                                      # seconds a quarter (120 bpm)
+    rh = pretty_midi.Instrument(program=0, name="up")
+    lh = pretty_midi.Instrument(program=0, name="down")
+    for bar, top in enumerate((["C4", "F4", "A4"], ["D4", "F4", "Bb4"])):
+        for half in range(2):
+            for k in (1, 2):
+                t = (bar * 4 + half * 2 + k * 0.5) * q
+                rh.notes += [pretty_midi.Note(70, pretty_midi.note_name_to_number(n), t, t + q / 2)
+                             for n in top]
+    for p, s, d in _ticks(FARMER_LH) + [(p, s + 96, d) for p, s, d in _ticks(FARMER_LH)]:
+        lh.notes.append(pretty_midi.Note(80, p, s / 12 * q, (s + d) / 12 * q))
+    pm.instruments += [rh, lh]
+    path = tmp_path / "farmer.mid"
+    pm.write(str(path))
+    src = score_input.load_notated_midi(path)
+    tune = src.parts[src.auto_part]
+    assert tune.tune and tune.name == "Acoustic Grand Piano, the tune"
+    assert [q.pitch for q in tune.melody] == [p for p, _, _ in _ticks(FARMER_LH)] * 2
+
+
+def test_piano_tune_rests_through_an_accompaniment_introduction():
+    """Moonlight-sonata texture: two bars of a triplet figure alone, then a tune in long
+    notes above the same figure: the flute waits, then plays the tune without the figure."""
+    rh, lh = [], []
+    figure = [56, 61, 64]
+    for b in range(6):
+        for beat in range(4):
+            for k, p in enumerate(figure):
+                rh.append(QNote(p, b * 48 + beat * 12 + 4 * k, 4))
+        lh.append(QNote(37, b * 48, 48))
+        lh.append(QNote(49, b * 48, 48))
+    tune = [(68, 96, 24), (69, 120, 24), (68, 144, 36), (66, 180, 12), (64, 192, 24), (68, 216, 24),
+            (66, 240, 24), (64, 264, 24)]
+    rh += [QNote(p, s, d) for p, s, d in tune]
+    line, where = score_input.find_tune([rh, lh], 48, 12)
+    assert _rows(line) == tune
+    assert [where[b] for b in range(6)] == [-1, -1, 0, 0, 0, 0]
+
+
+def test_piano_tune_keeps_broken_chord_notes_that_are_the_tune():
+    """Für Elise: the right hand's A-C-E-A answer is a broken chord and part of the tune;
+    the left hand's arpeggios under it are not."""
+    rh_line = [(76, 0, 3), (75, 3, 3), (76, 6, 3), (71, 9, 3), (74, 12, 3), (72, 15, 3),
+               (69, 18, 6), (60, 27, 3), (64, 30, 3), (69, 33, 3),
+               (71, 36, 6), (64, 45, 3), (68, 48, 3), (71, 51, 3),
+               (72, 54, 6), (64, 63, 3), (76, 66, 3), (75, 69, 3)]
+    lh = []
+    for b, (a, c, d) in enumerate([(45, 52, 57), (40, 52, 56), (45, 52, 57)]):
+        lh += [QNote(a, 18 + 18 * b, 3), QNote(c, 21 + 18 * b, 3), QNote(d, 24 + 18 * b, 3)]
+    rh = [QNote(p, s, d) for p, s, d in rh_line]
+    line, where = score_input.find_tune([rh, lh], 18, 6)
+    assert _rows(line) == rh_line
+    assert set(where.values()) == {0}
+
+
+def test_duet_piano_part_leaves_the_tune_out_of_both_hands(tmp_path, monkeypatch):
+    from sheetswap import piano
+    seen = {}
+
+    def fake(notes, line, grid, style, shift=0, key=None):
+        seen["notes"] = notes
+        return [], []
+
+    monkeypatch.setattr(piano, "accompany", fake)
+    src = score_input.load_score(_farmer_score(tmp_path / "farmer.musicxml"))
+    score_input.arrange_score(src, ArrangeOptions(mode="duet"))
+    sec = 60 / src.quarter_bpm / 12
+    pool = {(n.pitch, round(n.start / sec)) for n in seen["notes"]}
+    tune = {(q.pitch, q.start) for q in src.parts[src.auto_part].melody}
+    assert pool and not pool & tune                               # neither hand doubles the flute
+    assert {(60, 6), (65, 6), (69, 6), (48, 96)} <= pool          # the chords stay
+
+
 def test_options_part_survives_the_form_and_names_its_folder():
     o = ArrangeOptions.from_form({"part": " Violin  I "})
     assert o.part == "Violin I" and o.key().endswith("-pViolin_I")
@@ -409,6 +545,44 @@ def test_midi_at_low_resolution_keeps_triplets(tmp_path):
     src = score_input.load_notated_midi(_midi(tmp_path / "t.mid", TRICKY, resolution=220))
     assert src is not None
     assert _rows(src.parts[0].melody) == TRICKY and not src.parts[0].warnings
+
+
+def _midi_from(path, rows, num=4, den=4, program=0):
+    """A written MIDI file from (pitch, start, length) in ticks (12 a quarter), 120 bpm."""
+    pm = pretty_midi.PrettyMIDI(resolution=480)
+    pm.time_signature_changes.append(pretty_midi.TimeSignature(num, den, 0))
+    inst = pretty_midi.Instrument(program=program)
+    for p, s, d in rows:
+        inst.notes.append(pretty_midi.Note(80, p, s / 24, (s + d) / 24))
+    pm.instruments.append(inst)
+    pm.write(str(path))
+    return path
+
+
+@pytest.mark.parametrize("name", ["bach/bwv144.3", "bach/bwv2.6"])
+def test_midi_pickup_found_where_bar_lines_cut_fewest_notes(tmp_path, name):
+    """Bach chorales start on beat 4 (a quarter pickup); music21 writes their MIDI from
+    the pickup on. The bar lines that tie the fewest notes over (R-METER-1) put bar 1 a
+    beat in. The old rule (most note time on downbeats, the file's own start winning
+    near-ties) left bar 1 at the file's start: every bar line a beat early, the
+    cadences in the middle of the bar (bench/midi_downbeat.py: 71 of 120 chorales right
+    before, 108 now)."""
+    path = tmp_path / "chorale.mid"
+    corpus.parse(name).write("midi", fp=str(path))
+    src = score_input.load_notated_midi(path)
+    assert src.pickup == 12 and (src.beats_per_bar, src.beat_ticks) == (4, 12)
+
+
+def test_midi_pickup_of_a_written_tune(tmp_path):
+    tune = [(67, 0, 12)]
+    t = 12
+    for p, d in [(72, 24), (71, 12), (69, 12), (67, 24), (69, 24), (71, 12), (72, 12), (74, 24),
+                 (72, 36), (67, 12), (72, 24), (74, 24), (76, 24), (74, 12), (72, 12), (71, 36)]:
+        tune.append((p, t, d))
+        t += d
+    src = score_input.load_notated_midi(_midi_from(tmp_path / "tune.mid", tune))
+    assert src.pickup == 12
+    assert [q.start for q in src.parts[0].melody][:3] == [-12, 0, 24]
 
 
 def test_bar_lines_option_moves_a_midi_files_bars(tmp_path):

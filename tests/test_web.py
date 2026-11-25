@@ -257,6 +257,37 @@ def test_song_page_time_choices(client, out, monkeypatch):
     assert web.tempo_text(92.4, 12) == "92" and web.tempo_text(150, 6) == "150 (counting eighths)"
 
 
+def test_song_page_notation_check(client, out, monkeypatch):
+    """The "Notation check" line comes from notation.json next to the score."""
+    from sheetswap.notation import Issue, write_report
+    calls = []
+    plain = fake_arrange(calls)
+    issues: list = []
+
+    def with_report(song_dir, opts):
+        res = plain(song_dir, opts)
+        write_report(res["musicxml"].parent, issues, [])
+        return res
+    stub_pipeline(monkeypatch, arrange_and_render=with_report)
+    make_song(out, "abc12345")
+    html = client.get("/song/abc12345").get_data(as_text=True)
+    assert "Notation check: follows standard notation." in html
+
+    issues[:] = [Issue("R-REST-2", 4, "a half rest hides the beat"),
+                 Issue("R-BREATH-2", 9, "over 10 s of playing without a breath")]
+    html = client.get("/song/abc12345").get_data(as_text=True)
+    assert "Notation check: 2 things to fix." in html
+    assert "bar 4: a half rest hides the beat (R-REST-2)" in html
+
+
+def test_song_page_without_notation_check(client, out, monkeypatch):
+    # an arrangement folder whose score can't be read: no line, no error
+    stub_pipeline(monkeypatch, arrange_and_render=fake_arrange([]))
+    make_song(out, "abc12345")
+    resp = client.get("/song/abc12345")
+    assert resp.status_code == 200 and "Notation check" not in resp.get_data(as_text=True)
+
+
 def test_song_page_arrange_error(client, out, monkeypatch):
     def broken(song_dir, opts):
         raise RuntimeError("could not find a tune")

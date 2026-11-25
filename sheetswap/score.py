@@ -14,6 +14,14 @@ never crossing into the next beat untied; a whole beat of rest is one dotted
 quarter rest (a dotted half rest for half a bar of 12/8), and part of a beat
 is a quarter rest for its first two 8ths, else 8th and 16th rests. 8ths beam
 in threes.
+
+The rule IDs (R-METER-3, R-BEAM-2, ...) refer to docs/notation_rules.md. On
+top of the splitting above: a pickup bar holds only its notes (R-PAGE-5);
+beams are set per meter (R-BEAM-1..8: by beat, four 8ths over a half bar of
+4/4, threes in compound meters, one group a bar of 3/8, 16th beams unbroken
+inside a beat); a pitch keeps one spelling within a bar (R-ACC-6).
+write_outputs tidies the arrangement first and checks the result
+(notation.tidy, notation.lint), writing the report next to the score.
 """
 from __future__ import annotations
 
@@ -26,9 +34,12 @@ from pathlib import Path
 
 import numpy as np
 import pretty_midi
-from music21 import (articulations, chord, clef, duration, dynamics, expressions, instrument,
-                     key, layout, metadata, meter, note, pitch, spanner, stream, tempo, tie)
+from music21 import (articulations, beam, chord, clef, duration, dynamics, expressions,
+                     instrument, key, layout, metadata, meter, note, pitch, spanner, stream,
+                     tempo, tie)
 from music21 import bar as m21bar
+from music21.stream.enums import ShowNumber
+from music21.stream.makeNotation import setStemDirectionForBeamGroups
 
 from .checks import bar_ticks, lead_in_ticks
 from .config import FLUTE_PROGRAM, PIANO_PROGRAM, TICKS_PER_BEAT as T
@@ -160,6 +171,24 @@ def _line_events(line: list[QNote], shift: int) -> list[_Event]:
         out.append(_Event(n.start + shift, end - n.start, (n.pitch,), n.velocity,
                           n.breath_after, _passing(prv, n.pitch, nxt)))
     return out
+
+
+def _one_spelling_per_bar(events: list[_Event], bar: int, fifths: int, mode: str) -> None:
+    """Within a bar a pitch keeps one spelling (R-ACC-6): the one most of its
+    notes in that bar have (the earliest on a tie), not A-sharp then B-flat."""
+    by_bar: dict[tuple[int, int], list[_Event]] = {}
+    for e in events:
+        if len(e.pitches) == 1:
+            by_bar.setdefault((e.start // bar, e.pitches[0]), []).append(e)
+    for (_, p), evs in by_bar.items():
+        names = [spell(p, fifths, mode, e.direction).name for e in evs]
+        if len(set(names)) < 2:
+            continue
+        target = max(names, key=lambda n: (names.count(n), -names.index(n)))
+        for e, name in zip(evs, names):
+            if name != target:
+                e.direction = next(d for d in (0, 1, -1)
+                                   if spell(p, fifths, mode, d).name == target)
 
 
 def _passing(prev: int, p: int, nxt: int) -> int:
@@ -394,16 +423,23 @@ def _ql(ticks: int) -> Fraction:
 
 def _fill_measures(part: stream.Stream, events: list[_Event], n_bars: int, arr: Arrangement,
                    staff_clef, top: bool, compress_rests: bool = False,
-                   marks: "_Marks | None" = None) -> None:
+                   marks: "_Marks | None" = None, pickup: int = 0) -> None:
+    """One staff's bars. `pickup` > 0: the first bar is a pickup bar whose music
+    starts that many ticks into it; it holds no rests before that (R-PAGE-5)
+    and is numbered 0, so bar 1 is the first full bar."""
     mtr = _meter_of(arr)
     bar = mtr.bar
     trip_beats = set() if mtr.compound else {
         pos // T for e in events for pos in (e.start, e.end) if pos % T in (4, 8)}
-    measures = [stream.Measure(number=i + 1) for i in range(n_bars)]
+    first_number = 0 if pickup else 1
+    measures = [stream.Measure(number=i + first_number) for i in range(n_bars)]
+    if pickup:
+        measures[0].paddingLeft = _ql(pickup)
+        measures[0].showNumber = ShowNumber.NEVER       # MusicXML implicit="yes": not counted
 
     def put(s: int, el) -> None:
-        m = measures[s // bar]
-        m.insert(_ql(s % bar), el)
+        k = s // bar
+        measures[k].insert(_ql(s % bar - (pickup if k == 0 else 0)), el)
 
     def rests(a: int, b: int) -> None:
         for s, d, whole in _pieces(a, b, mtr, True, trip_beats):
@@ -412,7 +448,7 @@ def _fill_measures(part: stream.Stream, events: list[_Event], n_bars: int, arr: 
                 r.fullMeasure = True
             put(s, r)
 
-    cursor = 0
+    cursor = pickup
     placed: list[list] = []          # per event: its notated pieces
     for e in events:
         if e.start > cursor:
@@ -449,11 +485,147 @@ def _fill_measures(part: stream.Stream, events: list[_Event], n_bars: int, arr: 
     for m in measures:
         part.append(m)
     if marks is not None:
-        _attach_marks(part, measures, events, placed, marks, arr)
+        _attach_marks(part, measures, events, placed, marks, arr, pickup)
     part.makeNotation(inPlace=True)
+    _courtesy_accidentals(part, arr.key_fifths)
+    _beam_part(part, mtr)
     _number_only_when_beamed(part)
     if compress_rests:
         _multi_bar_rests(part)
+
+
+def _courtesy_accidentals(part: stream.Stream, fifths: int) -> None:
+    """R-ACC-3 on top of music21's accidentals: after a bar line, the first note
+    of a letter the bar before altered differently gets a courtesy accidental
+    (music21 misses it when another octave of that letter came last, e.g. F#6
+    then F4 in one bar, F6 in the next)."""
+    from .notation import needs_courtesy
+    ks = key.KeySignature(max(-7, min(7, fifths)))
+    key_alter = {p.step: int(p.alter) for p in ks.alteredPitches}
+    prev: dict[tuple[str, int], int] = {}
+    for meas in part.getElementsByClass(stream.Measure):
+        state: dict[tuple[str, int], int] = {}
+        seen: set[str] = set()
+        for el in meas.recurse().notes:
+            tied_on = el.tie is not None and el.tie.type in ("stop", "continue")
+            for p in el.pitches:
+                alter = int(p.alter)
+                shown = p.accidental is not None and p.accidental.displayStatus is True
+                if tied_on:
+                    continue
+                now = state.get((p.step, p.octave), key_alter.get(p.step, 0))
+                if (not shown and alter == now and p.step not in seen
+                        and needs_courtesy(p.step, p.octave, alter, prev,
+                                           key_alter.get(p.step, 0))):
+                    if p.accidental is None:
+                        p.accidental = pitch.Accidental("natural")
+                    p.accidental.displayStatus = True
+                    shown = True
+                if shown or alter != now:
+                    state[(p.step, p.octave)] = alter
+                seen.add(p.step)
+        prev = state
+
+
+# ---------------------------------------------------------------- beams
+
+
+_BEAMS = {"eighth": 1, "16th": 2, "32nd": 3}
+
+
+def _beam_unit(pos: int, m: _Meter) -> int:
+    """The beam group a position belongs to: its quarter beat (R-BEAM-1), its
+    dotted-quarter beat (R-BEAM-3; 3/8 is one such beat a bar, R-BEAM-4)."""
+    return pos // (D if m.compound else T)
+
+
+def _beam_part(part: stream.Stream, m: _Meter) -> None:
+    """Beam every bar as the rulebook has it (R-BEAM-1..8), replacing music21's
+    default (which beams 4/4 8ths in pairs and breaks 16th beams inside a beat):
+    notes shorter than a quarter are beamed per beat, a rest or a longer note
+    ends a beam; in 4/4 a half bar of four plain 8ths is one group (never across
+    the middle, R-BEAM-2); 16th beams run unbroken through a group, a lone 16th
+    takes a partial beam pointing into its 8th (R-BEAM-5). Stems of a group all
+    go the way its notes furthest from the middle line need (R-BEAM-8)."""
+    for meas in part.getElementsByClass(stream.Measure):
+        pad = round(Fraction(meas.paddingLeft) * T)
+        runs: list[list[tuple[int, object]]] = []
+        cur: list[tuple[int, object]] = []
+        unit = None
+        for el in meas.notesAndRests:
+            if el.duration.isGrace:
+                continue
+            el.beams = beam.Beams()
+            if not el.isRest:
+                el.stemDirection = "unspecified"
+            pos = round(Fraction(el.offset) * T) + pad
+            beamable = not el.isRest and el.duration.type in _BEAMS
+            if not beamable or _beam_unit(pos, m) != unit:
+                if cur:
+                    runs.append(cur)
+                cur, unit = [], None
+            if beamable:
+                cur.append((pos, el))
+                unit = _beam_unit(pos, m)
+        if cur:
+            runs.append(cur)
+        if not m.compound and m.bpb == 4:
+            runs = _half_bar_eighths(runs)
+        for run in runs:
+            if len(run) >= 2:
+                _set_beams(run)
+    setStemDirectionForBeamGroups(part, overrideConsistentStemDirections=True)
+    part.streamStatus.beams = True
+
+
+def _half_bar_eighths(runs: list[list[tuple[int, object]]]) -> list[list[tuple[int, object]]]:
+    """4/4: beats 1-2 (or 3-4) of two plain 8ths each become one group of four (R-BEAM-2)."""
+    def plain_beat(run) -> bool:
+        return (len(run) == 2 and run[0][0] % T == 0 and run[1][0] == run[0][0] + 6
+                and all(el.duration.type == "eighth" and not el.duration.tuplets
+                        and not el.duration.dots for _, el in run))
+
+    out: list[list[tuple[int, object]]] = []
+    for run in runs:
+        prev = out[-1] if out else None
+        if (prev is not None and plain_beat(run) and plain_beat(prev)
+                and prev[0][0] % 24 == 0 and run[0][0] == prev[0][0] + T):
+            out[-1] = prev + run
+        else:
+            out.append(run)
+    return out
+
+
+def _set_beams(run: list[tuple[int, object]]) -> None:
+    """Beams for one group: each level runs over the notes that have it; a lone
+    16th gets a partial beam, pointing right on the first note or on an 8th
+    boundary, else left."""
+    levels = [_BEAMS[el.duration.type] for _, el in run]
+    n = len(run)
+    kinds: list[list[tuple[str, str | None]]] = [[] for _ in run]
+    for level in range(1, max(levels) + 1):
+        i = 0
+        while i < n:
+            if levels[i] < level:
+                i += 1
+                continue
+            j = i
+            while j + 1 < n and levels[j + 1] >= level:
+                j += 1
+            if j > i:
+                kinds[i].append(("start", None))
+                for k in range(i + 1, j):
+                    kinds[k].append(("continue", None))
+                kinds[j].append(("stop", None))
+            else:
+                right = i == 0 or (i < n - 1 and run[i][0] % 6 == 0)
+                kinds[i].append(("partial", "right" if right else "left"))
+            i = j + 1
+    for (_, el), ks in zip(run, kinds):
+        b = beam.Beams()
+        for kind, direction in ks:
+            b.append(kind, direction)
+        el.beams = b
 
 
 def _number_only_when_beamed(part: stream.Stream) -> None:
@@ -483,7 +655,7 @@ def _multi_bar_rests(part: stream.Stream) -> None:
 
     for m in part.getElementsByClass(stream.Measure):
         items = list(m.notesAndRests)
-        if len(items) == 1 and items[0].isRest:
+        if len(items) == 1 and items[0].isRest and not m.paddingLeft:
             run.append(items[0])
         else:
             close()
@@ -498,6 +670,7 @@ class _Layout:
     n_bars: int
     shift: int
     marks: "_Marks"
+    pickup: int = 0          # ticks into the first bar where a pickup bar's music starts (0: none)
 
 
 def _layout(arr: Arrangement) -> _Layout:
@@ -508,8 +681,11 @@ def _layout(arr: Arrangement) -> _Layout:
     lh = _tidy(_chord_events(arr.lh, shift, arr.flute), compound)
     last = max((e.end for e in (*flute, *rh, *lh)), default=0)
     bar = bar_ticks(arr)
+    _one_spelling_per_bar(flute, bar, arr.key_fifths, arr.key_mode)
+    first = min((e.start for e in (*flute, *rh, *lh)), default=0)
+    pickup = first % bar if shift and first < bar else 0
     return _Layout(flute, rh, lh, max(1, -(-last // bar)), shift,
-                   _place_marks(arr.expression, flute, shift, bar))
+                   _place_marks(arr.expression, flute, shift, bar), pickup)
 
 
 # ---------------------------------------------------------------- expression marks
@@ -604,14 +780,15 @@ def _place_marks(marks: list[Mark], events: list[_Event], shift: int, bar: int) 
 
 
 def _attach_marks(part: stream.Stream, measures: list, events: list[_Event], placed: list[list],
-                  marks: _Marks, arr: Arrangement) -> None:
+                  marks: _Marks, arr: Arrangement, pickup: int = 0) -> None:
     """Put the marks on the music21 notes (before makeNotation, so grace notes get
     their accidentals): first piece of a tied note for attacks, last for fermatas."""
     bar = _meter_of(arr).bar
 
     def put(tick: int, el) -> None:
-        k = min(max(tick, 0) // bar, len(measures) - 1)
-        measures[k].insert(_ql(max(tick, 0) - k * bar), el)
+        tick = max(tick, pickup)
+        k = min(tick // bar, len(measures) - 1)
+        measures[k].insert(_ql(tick - k * bar - (pickup if k == 0 else 0)), el)
 
     with_dynamic = set()
     for tick, level, i in marks.dynamics:
@@ -688,7 +865,7 @@ def _build(arr: Arrangement, title: str, lay: _Layout) -> stream.Score:
     flute.partName, flute.partAbbreviation = "Flute", "Fl."
     flute.insert(0, instrument.Flute())
     _fill_measures(flute, lay.flute, lay.n_bars, arr, clef.TrebleClef(), top=True,
-                   compress_rests=not _is_duet(arr), marks=lay.marks)
+                   compress_rests=not _is_duet(arr), marks=lay.marks, pickup=lay.pickup)
     score.insert(0, flute)
 
     if _is_duet(arr):
@@ -700,8 +877,10 @@ def _build(arr: Arrangement, title: str, lay: _Layout) -> stream.Score:
         rh_pitches = sorted(p for e in lay.rh for p in e.pitches)
         rh_low = rh_pitches and rh_pitches[len(rh_pitches) // 2] < 55
         _fill_measures(rh, lay.rh, lay.n_bars, arr,
-                       clef.BassClef() if rh_low else clef.TrebleClef(), top=False)
-        _fill_measures(lh, lay.lh, lay.n_bars, arr, clef.BassClef(), top=False)
+                       clef.BassClef() if rh_low else clef.TrebleClef(), top=False,
+                       pickup=lay.pickup)
+        _fill_measures(lh, lay.lh, lay.n_bars, arr, clef.BassClef(), top=False,
+                       pickup=lay.pickup)
         score.insert(0, rh)
         score.insert(0, lh)
         group = layout.StaffGroup([rh, lh], name="Piano", abbreviation="Pno.",
@@ -944,15 +1123,24 @@ def _balanced_velocity(events, target: int):
 
 
 def write_outputs(arr: Arrangement, title: str, out_dir: Path) -> dict[str, Path]:
+    """Score (MusicXML), MIDI and the notation check (notation.json).
+
+    The arrangement is tidied first (notation.tidy: breath marks, held phrase
+    ends, slurs ended at breaths; `arr` itself is not changed), and the score
+    written is checked against docs/notation_rules.md (notation.lint)."""
+    from .notation import lint, tidy_report, write_report
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     xml_path, midi_path = out_dir / "score.musicxml", out_dir / "score.mid"
+    arr, fixes = tidy_report(arr)
     lay = _layout(arr)
-    _build(arr, title, lay).write("musicxml", fp=str(xml_path))
+    score = _build(arr, title, lay)
+    score.write("musicxml", fp=str(xml_path))
     if lay.marks.heading:
         xml_path.write_text(_join_tempo_heading(xml_path.read_text()))
     _write_midi(arr, lay, midi_path)
-    return {"musicxml": xml_path, "midi": midi_path}
+    report = write_report(out_dir, lint(arr, score), fixes)
+    return {"musicxml": xml_path, "midi": midi_path, "notation": report}
 
 
 _TEMPO_SPLIT = re.compile(

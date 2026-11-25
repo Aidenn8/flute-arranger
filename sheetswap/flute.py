@@ -137,3 +137,137 @@ def easy_key_shift(fifths: int) -> int:
         return 0
     ok = [s for s in range(-5, 7) if abs(key_after_shift(fifths, s)) <= EASY_MAX]
     return min(ok, key=lambda s: (abs(s), abs(key_after_shift(fifths, s)), s))
+
+
+# ---------------------------------------------------------------- polish for parts read from a score
+#
+# A part taken from sheet music keeps every note and rhythm of the original, so its
+# shape is the composer's, written for another instrument. Two things a flutist (and
+# an arranger) would still change, from docs/notation_rules.md:
+# - the register, phrase by phrase (R-FLUTE-1/2): the low register below G4 is soft and
+#   breathy and a piano covers it; f there is hardly possible; above A6 is shrill and
+#   hard to play softly. fit_to_flute picks one octave for the whole tune, so a phrase
+#   that sits low (the Moonlight sonata's tune when it drops into the bass) stays low.
+#   phrase_octaves moves such phrases by an octave, whole (their intervals intact),
+#   only where it clearly helps: each move costs, and so does a change of octave from
+#   one phrase to the next. No 8va signs: the app never writes them (R-RANGE-3).
+# - fast leaps of more than an octave (R-FLUTE-5): a broken-chord figure written for
+#   a pianist's hand (an arpeggio over two octaves in 16ths) is played as its outline,
+#   each note moved by octaves to stay within an octave of the one before.
+
+LOW_WEAK = 67                  # G4: below it the flute is weak (R-FLUTE-1)
+LOW_REG = 72                   # C5: C4-B4 is the low register
+HIGH_BRIGHT = 89               # F6: from here up, bright and hard to play softly
+TOP = 93                       # A6 (R-FLUTE-2, R-RANGE-3)
+LOUD_DYN = {"f", "ff", "fff", "ffff", "sf", "sfz", "fz", "sfp"}
+SOFT_DYN = {"p", "pp", "ppp", "pppp"}
+# costs in bars' worth of notes in a poor register (_note_cost per tick, over a bar)
+MOVE_COST = 0.1                # moving a phrase an octave from where fit_to_flute put it
+CHANGE_COST = 0.3              # the next phrase in another octave, straight on (no rest between)
+REST_CHANGE_COST = 0.15        # ... after a rest
+FAR_CHANGE_COST = 0.05         # ... after a rest of two bars or more
+FAST = TICKS_PER_BEAT // 2     # an 8th: notes this short count as fast (R-FLUTE-5)
+
+
+def _note_cost(pitch: int, dyn: str) -> float:
+    """How poorly a note sits on the flute (per tick), R-FLUTE-1/2."""
+    if pitch < LOW_WEAK:
+        return 1.0 + (1.0 if dyn in LOUD_DYN else 0.0)
+    if pitch < LOW_REG:
+        return 0.3 + (0.5 if dyn in LOUD_DYN else 0.0)
+    if pitch < HIGH_BRIGHT:
+        return 0.0
+    if pitch < TOP:
+        return 0.3
+    return 1.0 + (1.0 if dyn in SOFT_DYN else 0.0)
+
+
+def phrase_octaves(line: list[QNote], dynamics: list[tuple[int, str]] | None = None,
+                   beat_ticks: int = PHRASE_REST, bar_ticks: int = 4 * TICKS_PER_BEAT,
+                   cuts: set[int] | None = None) -> tuple[list[QNote], int]:
+    """Move whole phrases by an octave where the register clearly calls for it (see
+    the notes above). `dynamics`: (tick, "p"/"f"/...) in force from that tick. Phrases
+    end at rests of a beat or more, and a new one starts at each tick in `cuts` (the
+    score's slur ends, where the tune passes to the other hand). Returns (new line,
+    phrases moved)."""
+    from bisect import bisect_right
+    if not line:
+        return [], 0
+    out = [replace(q) for q in line]
+    levels = sorted(dynamics or [])
+    marks = [t for t, _ in levels]
+
+    def dyn(t: int) -> str:
+        i = bisect_right(marks, t) - 1
+        return levels[i][1] if i >= 0 else ""
+
+    phrases = []
+    for ph in _phrases(out, beat_ticks):
+        cur = [ph[0]]
+        for i in ph[1:]:
+            if cuts and out[i].start in cuts:
+                phrases.append(cur)
+                cur = []
+            cur.append(i)
+        phrases.append(cur)
+    shifts = (-12, 0, 12)
+    costs = []
+    for idx in phrases:
+        row = []
+        for k in shifts:
+            if not all(_playable(out[i].pitch + k) for i in idx):
+                row.append(float("inf"))
+                continue
+            c = sum(_note_cost(out[i].pitch + k, dyn(out[i].start)) * max(1, out[i].dur)
+                    for i in idx) / bar_ticks           # in bars' worth of badly placed notes
+            row.append(c + (MOVE_COST if k else 0.0))
+        costs.append(row)
+    # the cheapest octave for each phrase, a change of octave between phrases costing
+    best = [list(costs[0])]
+    back: list[list[int]] = []
+    for p in range(1, len(phrases)):
+        gap = out[phrases[p][0]].start - max(out[i].end for i in phrases[p - 1])
+        change = (FAR_CHANGE_COST if gap >= 2 * bar_ticks
+                  else REST_CHANGE_COST if gap >= beat_ticks else CHANGE_COST)
+        row, ptr = [], []
+        for j in range(3):
+            i = min(range(3), key=lambda i: (best[-1][i] + (change if i != j else 0.0), i != j))
+            ptr.append(i)
+            row.append(best[-1][i] + (change if i != j else 0.0) + costs[p][j])
+        best.append(row)
+        back.append(ptr)
+    j = min(range(3), key=lambda j: (best[-1][j], j != 1))
+    choice = [j]
+    for ptr in reversed(back):
+        j = ptr[j]
+        choice.append(j)
+    choice.reverse()
+    moved = 0
+    for idx, j in zip(phrases, choice):
+        k = shifts[j]
+        if k:
+            moved += 1
+            for i in idx:
+                out[i] = replace(out[i], pitch=out[i].pitch + k)
+    return out, moved
+
+
+def outline_leaps(line: list[QNote], fast: int = FAST) -> tuple[list[QNote], int]:
+    """Fast notes (`fast` ticks or shorter, played legato) leaping more than an octave
+    from the note before move by octaves to land within an octave of it (R-FLUTE-5):
+    the figure keeps its notes, in a span a flute can play. Returns (line, notes moved)."""
+    out = sorted((replace(q) for q in line), key=lambda q: q.start)
+    moved = 0
+    for i in range(1, len(out)):
+        a, b = out[i - 1], out[i]
+        if b.start - a.end >= 3 or max(a.dur, b.dur) > fast:
+            continue
+        p = b.pitch
+        while p - a.pitch > 12 and _playable(p - 12):
+            p -= 12
+        while a.pitch - p > 12 and _playable(p + 12):
+            p += 12
+        if p != b.pitch:
+            out[i] = replace(b, pitch=p)
+            moved += 1
+    return out, moved

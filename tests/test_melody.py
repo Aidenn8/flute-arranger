@@ -1,8 +1,8 @@
 import random
 import time
 
-from sheetswap.melody import (clean_monophonic, join_split_notes, piano_melody, projected_line,
-                              top_voice)
+from sheetswap.melody import (clean_monophonic, fill_tune, join_split_notes, piano_melody,
+                              projected_line, top_voice)
 from sheetswap.model import Note
 
 
@@ -275,3 +275,84 @@ def test_tune_note_held_while_the_chords_strike_it_again():
     held = next(n for n in out if n.pitch == 66 and abs(n.start - starts[-1]) < 0.01)
     assert after - 0.1 < held.end <= after         # held (nearly) until the next tune note
     assert not any(n.pitch == 66 and n.start > held.start for n in out)
+
+
+def _voiced_run():
+    """A 16th-note tune moving by step (0.2 s apart) whose every other note the pianist
+    voices loudly (100) and the others a little less (96, too soft to count as voiced),
+    over a left hand struck with each tune note two octaves down (85)."""
+    tune = [72, 74, 76, 77, 79, 77, 76, 74, 72, 71, 72, 74, 76, 74, 72, 71] * 3
+    notes = []
+    for k, p in enumerate(tune):
+        t = 0.2 * k
+        notes.append(Note(p, t, t + 0.19, 100 if k % 2 == 0 else 96))
+        notes.append(Note(p - 24, t, t + 0.19, 85))
+    return notes, tune
+
+
+def test_fill_tune_adds_the_softer_notes_between_voiced_ones():
+    notes, tune = _voiced_run()
+    voiced = piano_melody(notes)
+    assert len(voiced) < 0.6 * len(tune)              # only the loud notes are "voiced"
+    out = fill_tune(voiced, notes)
+    assert [n.pitch for n in out] == tune[:-1]        # incl. 72-71-72; the last note has no
+    #                                                   voiced note after it to fill up to
+    assert _is_monophonic(out)
+    assert not any(n.pitch < 60 for n in out)         # never the left hand
+
+
+def test_fill_tune_leaves_out_accompaniment_under_a_held_tune_note():
+    # loud tune notes held 1.5 s; under them single notes in the tune's register, loud
+    # enough to pass for the tune by velocity alone, struck while the tune note sounds
+    notes, tune = [], []
+    for i in range(24):
+        t = 1.5 * i
+        p = (79, 77, 75, 74)[i % 4]
+        notes.append(Note(p, t, t + 1.45, 90))
+        tune.append(p)
+        notes.append(Note(39, t, t + 1.4, 55))
+        for k, q in enumerate((70, 72, 74, 72, 70)):
+            notes.append(Note(q, t + 0.25 * (k + 1), t + 0.25 * (k + 1) + 0.24, 76))
+    voiced = piano_melody(notes)
+    assert [n.pitch for n in voiced] == tune
+    assert [n.pitch for n in fill_tune(voiced, notes)] == tune
+
+
+def test_fill_tune_keeps_a_repeated_tune_note_repeated():
+    # Moonlight: dotted 8th + 16th on one pitch, voiced (85), over triplets (70); the
+    # triplet note a step below that falls between them is not the tune
+    notes = []
+    for i in range(12):
+        t = 2.0 * i
+        notes += [Note(68, t, t + 0.95, 85), Note(68, t + 1.2, t + 1.95, 85), Note(44, t, t + 1.9, 60)]
+        notes += [Note(p, t + s, t + s + 0.2, 70) for p, s in ((61, 0.3), (64, 0.6), (66, 0.95),
+                                                                 (61, 1.3), (64, 1.6))]
+    voiced = piano_melody(notes)
+    assert {n.pitch for n in voiced} == {68}
+    assert {n.pitch for n in fill_tune(voiced, notes)} == {68}
+
+
+def test_fill_tune_returns_an_unvoiced_line_as_it_is():
+    notes = [Note(72 + k % 3, 0.25 * k, 0.25 * k + 0.24, 80) for k in range(40)]
+    line = top_voice(notes)
+    assert projected_line(notes) is None
+    assert _rows(fill_tune(line, notes)) == _rows(line)
+
+
+def test_piano_melody_fill_skips_chords_under_a_held_tune_note():
+    # Chopin's E minor prelude: the tune holds a note for most of a bar over repeated
+    # chords (no pedal: each chord ends as the next is struck); a chord's top note now
+    # and then a little louder, in the tune's register, is still not the tune
+    notes, tune = [], []
+    for bar in range(24):
+        t = 3.0 * bar
+        p = (71, 72, 71, 69)[bar % 4]
+        notes.append(Note(p, t, t + 2.9, 80))
+        tune.append(p)
+        for k in range(4):
+            c = t + 0.75 * k
+            v = 42 if k in (1, 3) else 35
+            notes += [Note(59, c, c + 0.73, 34), Note(64, c, c + 0.73, v)]
+    assert projected_line(notes) is not None
+    out = piano_melody(notes)
+    assert [n.pitch for n in out] == tune

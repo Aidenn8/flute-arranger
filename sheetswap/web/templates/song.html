@@ -110,6 +110,11 @@
 <p>Key: {{ facts.key }} &middot; Time: {{ facts.time }} &middot; Tempo: {{ facts.tempo }}</p>
 {% endif %}
 
+{% if notation %}
+<p>Notation check: {{ notation.headline }}.{% if notation.top %}<br>
+<small>{% if notation.label %}{{ notation.label }}: {% endif %}{{ notation.top|join("; ") }}{% if notation.more %}; and {{ notation.more }} more{% endif %}.</small>{% endif %}</p>
+{% endif %}
+
 <p>Listen:</p>
 <table border="0" cellpadding="4">
 <tr>

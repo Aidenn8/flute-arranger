@@ -12,6 +12,7 @@ import numpy as np
 from .model import (DOTTED_BEAT, EIGHTH_BEAT, METERS, Analysis, ArrangeOptions, Arrangement, Mark,
                     BeatGrid, Note, QNote)
 
+RENDER_VERSION = 2   # bump when the way pages are written changes (notation rules, expression)
 ProgressFn = Callable[[int, int, str], None]
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus", ".webm", ".aiff", ".aif"}
 MIDI_EXTS = {".mid", ".midi"}
@@ -406,6 +407,12 @@ def arrange(an: Analysis, opts: ArrangeOptions) -> Arrangement:
     melody, used, warnings = pick_melody(an, opts.melody_source)
     pool, bass = _accompaniment_pool(an, used, melody)
     grid = bar_grid(an, opts, melody, pool + (bass or []))
+    if used in ("piano", "midi_all"):
+        # the meter and bar lines come from the notes the pianist voiced; the
+        # part also gets the softer tune notes between them
+        from .melody import fill_tune
+        melody = fill_tune(melody, an.sources[used])
+        pool, bass = _accompaniment_pool(an, used, melody)
     line = quantize_line(melody, grid, simple=opts.simple)
 
     everything = [n for notes in an.sources.values() for n in notes]
@@ -468,7 +475,7 @@ def arrange_and_render(song_dir: Path, opts: ArrangeOptions) -> dict:
     from .render import render_svg, render_audio
 
     song_dir = Path(song_dir)
-    out = song_dir / "arr" / opts.key()
+    out = song_dir / "arr" / f"v{RENDER_VERSION}-{opts.key()}"   # new version = old pages re-rendered
     info_path = out / "info.json"
     info = _read_json(info_path)
     if info is None:

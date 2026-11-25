@@ -14,7 +14,9 @@ start in the beat), the way a musician reads them: the likeliest pattern
 given how far each onset is from it and how common the pattern is. How
 common is learned from the piece itself, on top of the usual vocabulary of
 printed music (VOCAB), so a minuet in 8ths keeps its 8ths where the playing
-wavers, and a piece in 16th runs reads its 16ths.
+wavers, and a piece in 16th runs reads its 16ths. Where a beat sits in the bar
+counts too: beat 1 (then the middle of the bar) rarely starts without a note
+(DOWN_EMPTY, MID_EMPTY).
 """
 from __future__ import annotations
 
@@ -61,6 +63,13 @@ MERGE = 1.5          # ticks: onsets closer than this are one note (the louder o
 PUSH = 0.25          # of a beat: an onset this close before a beat may be its downbeat
 TRIPLET_CLEAR = 1.0  # ticks: a beat clearly in triplets has 3+ onsets this close to 0, 4, 8 ...
 TRIPLET_SHARE = 0.1  # ... and triplets are read only if this share of beats with 2+ onsets are
+# The meter's hierarchy (docs/notation_rules.md R-METER-3, R-PHR-2): beat 1 is
+# the strongest place in the bar, then the middle of a 4/4 or 12/8 bar, then the
+# other beats. A tune starts a note on beat 1 far more often than it ties into it
+# or syncopates across it, so on beat 1 a pattern with no onset at the beat's
+# start counts this much less likely (on the middle beat MID_EMPTY):
+DOWN_EMPTY = 0.5
+MID_EMPTY = 0.75
 # Gaps shorter than a beat are held through (a flute line is legato; a
 # pianist's lifted fingers are not rests).
 SHORT_BAR = 3        # felt beats: shorter bars (2/4, 6/8, 3/8) get breath windows of 4 bars
@@ -178,7 +187,7 @@ def _options(xs: list[float], grace: list[bool], by_size: dict[int, list[tuple[i
 
 
 def _read_rhythm(onsets: list[float], unit: int, simple: bool = False,
-                 grace: list[bool] | None = None
+                 grace: list[bool] | None = None, beats_per_bar: int = 0
                  ) -> tuple[list[int | None], dict[int, tuple[int, ...]]]:
     """Each onset's tick (None = left out) and each beat's pattern.
 
@@ -192,6 +201,11 @@ def _read_rhythm(onsets: list[float], unit: int, simple: bool = False,
     patterns this piece was read as last round; the spread is the piece's
     (robust) timing error from last round. A few rounds learn what the piece
     uses: 8ths, 16th runs, triplets.
+
+    With beats_per_bar (beat 0 is the first downbeat) the pattern's chance
+    also follows the meter's hierarchy: times DOWN_EMPTY / MID_EMPTY for a
+    pattern with no onset at the start of beat 1 / of the middle beat of a
+    4/4 or 12/8 bar (a note held or tied into it, a syncopation).
     """
     grace = grace or [False] * len(onsets)
     vocab = _vocabulary(unit, simple, not simple and uses_triplets(onsets, unit))
@@ -223,20 +237,30 @@ def _read_rhythm(onsets: list[float], unit: int, simple: bool = False,
         idx, opts = table[b][came, goes]
         return idx, opts[k]
 
+    bpb = max(beats_per_bar, 1)
+    empty_factor = {0: DOWN_EMPTY} if beats_per_bar else {}
+    if beats_per_bar >= 4 and beats_per_bar % 2 == 0:
+        empty_factor[beats_per_bar // 2] = MID_EMPTY
+
     counts: Counter = Counter()
     spread = SPREAD[1]
     prior = sum(vocab.values())
     picks: dict[int, tuple[bool, bool, int]] = {}
     for _ in range(ROUNDS):
         seen = sum(counts.values())
-        cost_of = {p: -math.log((PRIOR_BEATS * c / prior + counts[p]) / (PRIOR_BEATS + seen))
+        overall = {p: (PRIOR_BEATS * c / prior + counts[p]) / (PRIOR_BEATS + seen)
                    for p, c in vocab.items()}
+        costs = {pos: {p: -math.log(q * (f if 0 not in p else 1.0)) for p, q in overall.items()}
+                 for pos, f in empty_factor.items()}
+        plain = {p: -math.log(q) for p, q in overall.items()}
+
         var2 = 2 * spread ** 2
         cost = {False: 0.0}                        # so far, by whether the last beat pushed out
         back = []
         for b in beats:
             new: dict[bool, float] = {}
             arg: dict[bool, tuple[bool, int]] = {}
+            cost_of = costs.get(b % bpb, plain) if beats_per_bar else plain
             for (came, goes), (_, opts) in table[b].items():
                 if came not in cost:
                     continue
@@ -313,7 +337,8 @@ def quantize_line(notes: list[Note], grid: BeatGrid, simple: bool = False) -> li
     grace = [e - s < SIXTEENTH and any(0 <= j < len(merged) and abs(merged[j][0] - s) < SIXTEENTH
                                        and merged[j][2].dur > 2 * n.dur for j in (i - 1, i + 1))
              for i, (s, e, n) in enumerate(merged)]
-    ticks, patterns = _read_rhythm([s for s, _, _ in merged], unit, simple, grace)
+    ticks, patterns = _read_rhythm([s for s, _, _ in merged], unit, simple, grace,
+                                   grid.beats_per_bar)
 
     def step_at(t: float) -> int:
         return _end_step(patterns.get(_beat_of(t, unit), ()), unit, simple)
