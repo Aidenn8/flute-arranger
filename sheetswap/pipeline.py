@@ -241,6 +241,31 @@ def rescale_tempo(grid: BeatGrid, tempo: int) -> BeatGrid:
     return grid
 
 
+def bar_grid(an: Analysis, opts: ArrangeOptions, melody: list[Note]) -> BeatGrid:
+    """The beat grid the score is written on: tempo and meter choices, then bar lines.
+
+    For audio, beat 1 is placed where the tune's long notes fall (a MIDI file's
+    own bar lines are kept); the user's bar-line shift comes on top, keeping
+    the pickup shorter than a bar (3 beats later = 1 beat earlier).
+    """
+    from .beats import melody_downbeat
+
+    grid = rescale_tempo(an.grid, opts.tempo)
+    bpb = opts.meter if opts.meter in (3, 4) else grid.beats_per_bar
+    grid = BeatGrid(grid.beats, bpb, grid.first_downbeat)
+    starts = [n.start for ns in an.sources.values() for n in ns]
+    if an.kind != "midi" and starts:
+        grid = melody_downbeat(melody, grid, min(starts))
+    if opts.barshift:
+        first = grid.first_downbeat + opts.barshift % bpb
+        if starts:
+            first_note_beat = int(np.floor(grid.to_beats(min(starts)))) + grid.first_downbeat
+            while first - bpb >= first_note_beat:
+                first -= bpb
+        grid = BeatGrid(grid.beats, bpb, first)
+    return grid
+
+
 def arrange(an: Analysis, opts: ArrangeOptions) -> Arrangement:
     from .rhythm import quantize_line, add_breath_marks
     from .flute import fit_to_flute, easy_key_shift, key_after_shift
@@ -249,17 +274,7 @@ def arrange(an: Analysis, opts: ArrangeOptions) -> Arrangement:
     from .checks import check_arrangement
 
     melody, used, warnings = pick_melody(an, opts.melody_source)
-    grid = rescale_tempo(an.grid, opts.tempo)
-    bpb = opts.meter if opts.meter in (3, 4) else grid.beats_per_bar
-    if bpb != grid.beats_per_bar or opts.barshift:
-        first = grid.first_downbeat + opts.barshift % bpb
-        # keep the pickup shorter than a bar (3 beats later = 1 beat earlier)
-        starts = [n.start for ns in an.sources.values() for n in ns]
-        if starts:
-            first_note_beat = int(np.floor(grid.to_beats(min(starts)))) + grid.first_downbeat
-            while first - bpb >= first_note_beat:
-                first -= bpb
-        grid = BeatGrid(grid.beats, bpb, first)
+    grid = bar_grid(an, opts, melody)
     line = quantize_line(melody, grid, simple=opts.simple)
 
     everything = [n for notes in an.sources.values() for n in notes]

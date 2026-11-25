@@ -239,3 +239,20 @@ def test_grid_from_empty_midi():
     g = grid_from_midi(pretty_midi.PrettyMIDI(initial_tempo=90))
     assert len(g.beats) >= 2
     assert 60 <= g.bpm() <= 180
+
+
+def test_melody_long_notes_place_beat_one():
+    from sheetswap.beats import melody_downbeat
+    from sheetswap.model import BeatGrid, Note
+    grid = BeatGrid([i * 0.5 for i in range(40)], 4, 0)
+    # tune: a long note on beats 2, 6, 10, ... (a half note), short notes between
+    mel = []
+    for bar in range(9):
+        t = (bar * 4 + 2) * 0.5
+        mel.append(Note(76, t, t + 1.0, 90))
+        mel.append(Note(74, t + 1.0, t + 1.5, 70))
+        mel.append(Note(72, t + 1.5, t + 2.0, 70))
+    g = melody_downbeat(mel, grid, music_start=1.0)
+    assert g.first_downbeat == 2
+    even = [Note(72, i * 0.5, i * 0.5 + 0.45, 80) for i in range(36)]
+    assert melody_downbeat(even, grid, 0.0) is grid      # no evidence: unchanged
