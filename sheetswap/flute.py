@@ -16,20 +16,21 @@ EDGE_COST = 1                  # per tick in the hard range but not the comforta
 OUT_COST = 20                  # per tick outside the hard range
 CENTER_COST = 0.02             # per note, per semitone the median sits away from SWEET
 KEEP_SHARE = 0.9               # the octave option applies only if this share stays playable
-PHRASE_REST = TICKS_PER_BEAT   # a rest at least this long (ticks) ends a phrase
+PHRASE_REST = TICKS_PER_BEAT   # default: a rest of a beat (ticks) or more ends a phrase
 EASY_MAX = 2                   # most sharps/flats in an "easy" key
 
 
-def fit_to_flute(line: list[QNote], octave: int = 0) -> tuple[list[QNote], int]:
+def fit_to_flute(line: list[QNote], octave: int = 0,
+                 beat_ticks: int = PHRASE_REST) -> tuple[list[QNote], int]:
     """Move `line` into the flute's range. Returns (new line, global shift).
 
     One octave shift for the whole line is picked by cost (time outside the
     comfortable and hard ranges, plus distance of the median from G5); the
     user's `octave` (-1/0/+1) is added if 90% of notes stay playable. Notes
     still outside C4..C7 are fixed a phrase at a time (phrases end at rests of
-    a beat or more): the whole phrase moves by octaves if that fits it all,
-    so its leaps stay intact; otherwise single notes move by octaves.
-    The global shift is a multiple of 12; phrase moves are not included.
+    a beat, `beat_ticks`, or more): the whole phrase moves by octaves if that
+    fits it all, so its leaps stay intact; otherwise single notes move by
+    octaves. The global shift is a multiple of 12; phrase moves are not included.
     """
     if not line:
         return [], 0
@@ -40,7 +41,7 @@ def fit_to_flute(line: list[QNote], octave: int = 0) -> tuple[list[QNote], int]:
         if sum(_playable(n.pitch + moved) for n in line) >= KEEP_SHARE * len(line):
             shift = moved
     out = [replace(n, pitch=n.pitch + shift) for n in line]
-    for phrase in _phrases(out):
+    for phrase in _phrases(out, beat_ticks):
         _fold(out, phrase)
         _fix_octave_slips(out, phrase)
     return out, shift
@@ -80,12 +81,12 @@ def _cost(line: list[QNote], shift: int) -> float:
     return cost + CENTER_COST * abs(med - SWEET) * len(line)
 
 
-def _phrases(line: list[QNote]) -> list[list[int]]:
-    """Indices of `line`, in time order, split at rests of PHRASE_REST+ ticks."""
+def _phrases(line: list[QNote], rest: int = PHRASE_REST) -> list[list[int]]:
+    """Indices of `line`, in time order, split at rests of `rest`+ ticks."""
     phrases: list[list[int]] = []
     end = None
     for i in sorted(range(len(line)), key=lambda i: line[i].start):
-        if end is None or line[i].start - end >= PHRASE_REST:
+        if end is None or line[i].start - end >= rest:
             phrases.append([])
             end = line[i].end
         phrases[-1].append(i)

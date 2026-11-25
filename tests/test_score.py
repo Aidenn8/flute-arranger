@@ -261,3 +261,113 @@ def test_midi_has_pickup_lead_in(tmp_path):
     pm = pretty_midi.PrettyMIDI(str(write_outputs(arr, "P", tmp_path)["midi"]))
     starts = sorted(n.start for inst in pm.instruments for n in inst.notes)
     assert abs(starts[0] - 3.5) < 1e-3 and abs(starts[1] - 4.0) < 1e-3
+
+
+# ---------------------------------------------------------------- compound meters
+
+def beam_groups(measure):
+    """Runs of beamed notes in a measure, as lists of quarterLengths."""
+    groups, cur = [], []
+    for el in measure.notesAndRests:
+        b = el.beams.getTypes() if not el.isRest else []
+        if not b:
+            continue
+        cur.append(Fraction(el.quarterLength))
+        if b[0] == "stop":
+            groups.append(cur)
+            cur = []
+    return groups
+
+
+def six_eight(flute, bpb=2, beat_ticks=18, bpm=60):
+    return Arrangement(flute=flute, beats_per_bar=bpb, beat_ticks=beat_ticks, bpm=bpm)
+
+
+def test_six_eight_signature_tempo_and_beams():
+    flute = [q(72 + i, 6 * i, 6) for i in range(6)]                      # bar 1: six 8ths
+    flute += [q(72, 36, 12), q(74, 48, 6), q(76, 54, 6), q(77, 60, 6), q(79, 66, 6)]
+    s = build_score(six_eight(flute, bpm=66), "Jig")
+    part = flute_part(s)
+    assert bar(part, 1).getElementsByClass(meter.TimeSignature)[0].ratioString == "6/8"
+    mm = list(s.recurse().getElementsByClass(tempo.MetronomeMark))
+    assert mm[0].number == 66 and mm[0].referent.quarterLength == 1.5       # dotted quarter = 66
+    F = Fraction
+    assert beam_groups(bar(part, 1)) == [[F(1, 2)] * 3, [F(1, 2)] * 3]      # 8ths in threes
+    # quarter + flagged 8th, then three beamed 8ths
+    assert shape(bar(part, 2)) == [("n", F(1), None), ("n", F(1, 2), None)] + [("n", F(1, 2), None)] * 3
+    assert beam_groups(bar(part, 2)) == [[F(1, 2)] * 3]
+
+
+def test_six_eight_rests_ties_and_dotted_notes():
+    F = Fraction
+    flute = [q(72, 0, 36),                       # bar 1: dotted half
+             q(74, 42, 6), q(76, 48, 6),         # bar 2: 8th rest, two 8ths | dotted quarter rest
+             q(77, 78, 18),                      # bar 3: 8th rest, quarter tied to an 8th, ...
+             q(79, 96, 12),                      # ... quarter on the 2nd 8th of beat 2
+             q(81, 108, 9), q(79, 117, 3), q(77, 120, 6),   # bar 4: siciliano, then a beat's rest
+             q(76, 156, 6)]                      # bar 5: quarter rest + 8th, dotted quarter rest
+    part = flute_part(build_score(six_eight(flute), "x"))
+    assert shape(bar(part, 1)) == [("n", F(3), None)]
+    assert shape(bar(part, 2)) == [("r", F(1, 2), None), ("n", F(1, 2), None),
+                                   ("n", F(1, 2), None), ("r", F(3, 2), None)]
+    assert shape(bar(part, 3)) == [("r", F(1, 2), None), ("n", F(1), "start"),
+                                   ("n", F(1, 2), "stop"), ("n", F(1), None)]
+    assert shape(bar(part, 4)) == [("n", F(3, 4), None), ("n", F(1, 4), None),
+                                   ("n", F(1, 2), None), ("r", F(3, 2), None)]
+    assert beam_groups(bar(part, 4)) == [[F(3, 4), F(1, 4), F(1, 2)]]
+    assert shape(bar(part, 5)) == [("r", F(1), None), ("n", F(1, 2), None), ("r", F(3, 2), None)]
+
+
+def test_compound_rests_show_the_beat():
+    F = Fraction
+    # 12/8: an empty half bar is one dotted half rest; 9/8 has none
+    part = flute_part(build_score(six_eight([q(72, 0, 36)], bpb=4), "x"))
+    assert shape(bar(part, 1)) == [("n", F(3), None), ("r", F(3), None)]
+    part = flute_part(build_score(six_eight([q(72, 0, 18)], bpb=3), "x"))
+    assert shape(bar(part, 1)) == [("n", F(3, 2), None), ("r", F(3, 2), None), ("r", F(3, 2), None)]
+    # an empty bar is a whole-bar rest
+    part = flute_part(build_score(six_eight([q(72, 0, 36), q(74, 72, 36)]), "x"))
+    m2 = bar(part, 2)
+    assert shape(m2) == [("r", F(3), None)] and m2.notesAndRests[0].fullMeasure in (True, "always")
+
+
+def test_three_eight_in_eighth_beats():
+    F = Fraction
+    flute = [q(76, 0, 3), q(75, 3, 3), q(76, 6, 3), q(75, 9, 3), q(76, 12, 3), q(71, 15, 3),
+             q(74, 18, 12), q(72, 30, 6), q(69, 36, 18)]
+    s = build_score(six_eight(flute, bpb=3, beat_ticks=6, bpm=144), "Elise")
+    part = flute_part(s)
+    assert bar(part, 1).getElementsByClass(meter.TimeSignature)[0].ratioString == "3/8"
+    mm = list(s.recurse().getElementsByClass(tempo.MetronomeMark))[0]
+    assert mm.number == 144 and mm.referent.quarterLength == 0.5            # eighth = 144
+    assert beam_groups(bar(part, 1)) == [[F(1, 4)] * 6]                     # one beam a bar
+    assert shape(bar(part, 2)) == [("n", F(1), None), ("n", F(1, 2), None)]
+    assert shape(bar(part, 3)) == [("n", F(3, 2), None)]
+    for m in part.getElementsByClass(stream.Measure):
+        assert m.duration.quarterLength == 1.5
+    # the same notes on one dotted beat a bar look the same
+    one = flute_part(build_score(six_eight(flute, bpb=1, beat_ticks=18, bpm=48), "x"))
+    assert [shape(m) for m in one.getElementsByClass(stream.Measure)] == \
+           [shape(m) for m in part.getElementsByClass(stream.Measure)]
+
+
+def test_compound_midi_tempo_and_signature(tmp_path):
+    # 6/8 at dotted quarter = 60: an 8th lasts 1/3 s, a bar 2 s
+    arr = six_eight([q(72, 0, 6), q(74, 6, 6), q(76, 12, 6), q(77, 36, 18)], bpm=60)
+    pm = pretty_midi.PrettyMIDI(str(write_outputs(arr, "M", tmp_path)["midi"]))
+    sig = pm.time_signature_changes[0]
+    assert (sig.numerator, sig.denominator) == (6, 8)
+    assert abs(pm.get_tempo_changes()[1][0] - 90) < 1e-3                    # quarters a minute
+    notes = sorted(pm.instruments[0].notes, key=lambda n: n.start)
+    assert [round(n.start, 3) for n in notes] == [0.0, 0.333, 0.667, 2.0]
+    assert abs(notes[-1].end - notes[-1].start - 1.0) < 1e-3
+
+
+def test_six_eight_renders_with_verovio(tmp_path):
+    from sheetswap.render import render_svg
+    flute = [q(74, -6, 6)] + [q(72 + i % 5, 6 * i, 6) for i in range(12)] + [q(79, 72, 36)]
+    paths = write_outputs(six_eight(flute), "Jig", tmp_path)
+    xml = paths["musicxml"].read_text()
+    assert "<beats>6</beats>" in xml and "<beat-type>8</beat-type>" in xml
+    svgs = render_svg(paths["musicxml"])
+    assert svgs and "<svg" in svgs[0]

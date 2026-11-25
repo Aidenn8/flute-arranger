@@ -24,9 +24,8 @@ from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
 from math import floor
 
-from .config import TICKS_PER_BEAT
 from .harmony import Chord, harmonize
-from .model import BeatGrid, Note, QNote
+from .model import DOTTED_BEAT, QUARTER_BEAT, BeatGrid, Note, QNote
 
 LH_LOW, LH_HIGH = 36, 47     # chords style: bass note register (C2..B2)
 RH_LOW, RH_HIGH = 52, 67     # chords style: right-hand triad register (E3..G4)
@@ -209,8 +208,10 @@ def _chords_style(notes, flute_notes, flute: _FluteFloor, grid: BeatGrid, shift:
     tune = [QNote(q.pitch - shift, q.start, q.dur) for q in flute_notes]
     rh_notes, lh_notes, prev = [], [], None
     # one Chord per run of the same harmony inside a bar, so it is held to its
-    # end and struck again each bar; the pickup belongs to the flute alone
-    for c in harmonize(notes, grid, bass, tune, key):
+    # end and struck again each bar; the pickup belongs to the flute alone.
+    # Chords may change each beat: a quarter, or a dotted quarter in 6/8 and 3/8.
+    unit = QUARTER_BEAT if grid.beat_ticks == QUARTER_BEAT else DOTTED_BEAT
+    for c in harmonize(notes, grid, bass, tune, key, unit=unit):
         if c.start < 0:
             continue
         tones, guide = _rh_tones(c, shift)
@@ -275,7 +276,7 @@ def _without_tune(notes: list[Note], flute: list[QNote], grid: BeatGrid, shift: 
 
 
 def _cleaned_style(notes, flute_notes, flute: _FluteFloor, grid: BeatGrid, shift: int, bass):
-    bar = grid.beats_per_bar * TICKS_PER_BEAT
+    bar = grid.bar_ticks
     source = _without_tune(list(notes) + list(bass or []), flute_notes, grid, shift)
     source = [n for n in source if n.end - n.start >= MIN_NOTE_S]
     rh, lh = [], []

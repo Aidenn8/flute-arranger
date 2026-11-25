@@ -15,3 +15,4 @@ basic-pitch[onnx]
 pytest
 imageio-ffmpeg
 tinysoundfont  # install with --no-deps (pyaudio not needed)
+beat-this @ https://github.com/CPJKU/beat_this/archive/main.zip  # neural beat + downbeat tracker (approved 2026-11-24)

@@ -229,6 +229,34 @@ def test_song_page_done_renders_svg_and_links(client, out, monkeypatch):
     assert calls[-1].octave == 1
 
 
+def test_song_page_time_choices(client, out, monkeypatch):
+    calls = []
+    plain = fake_arrange(calls)
+
+    def compound(song_dir, opts):
+        res = plain(song_dir, opts)
+        res["arr"] = Arrangement(flute=[], beats_per_bar=2, beat_ticks=18, bpm=60.2)
+        return res
+    stub_pipeline(monkeypatch, arrange_and_render=compound)
+    make_song(out, "abc12345")
+    html = client.get("/song/abc12345").get_data(as_text=True)
+    assert calls[-1].meter == "auto" and 'name="meter" value="auto" checked' in html
+    for m in ("2/4", "3/4", "4/4", "3/8", "6/8", "9/8", "12/8"):
+        assert f'name="meter" value="{m}"' in html
+    assert "Time: 6/8" in html and "Tempo: 60 (counting dotted quarters)" in html
+
+    html = client.get("/song/abc12345?meter=6%2F8").get_data(as_text=True)
+    assert calls[-1].meter == "6/8"
+    assert 'name="meter" value="6/8" checked' in html
+    assert "meter=6/8" in html                                      # carried into the print link
+    client.get("/song/abc12345/print?meter=6/8")
+    assert calls[-1].meter == "6/8"
+    # a link from before 6/8 existed
+    client.get("/song/abc12345?meter=3")
+    assert calls[-1].meter == "3/4"
+    assert web.tempo_text(92.4, 12) == "92" and web.tempo_text(150, 6) == "150 (counting eighths)"
+
+
 def test_song_page_arrange_error(client, out, monkeypatch):
     def broken(song_dir, opts):
         raise RuntimeError("could not find a tune")

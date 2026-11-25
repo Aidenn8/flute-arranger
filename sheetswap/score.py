@@ -7,6 +7,13 @@ into pieces that follow the usual engraving rules, so the page shows the beat:
   syncopation inside a half bar;
 - rests never use dots and never cross a beat (a half rest is allowed on
   beats 1 and 3 of 4/4); an empty bar gets one whole-bar rest.
+
+In 6/8, 9/8, 12/8 and 3/8 the page shows dotted-quarter beats instead: notes
+inside a beat are 8ths, 16ths, a quarter + 8th or a dotted 8th + 16th + 8th,
+never crossing into the next beat untied; a whole beat of rest is one dotted
+quarter rest (a dotted half rest for half a bar of 12/8), and part of a beat
+is a quarter rest for its first two 8ths, else 8th and 16th rests. 8ths beam
+in threes.
 """
 from __future__ import annotations
 
@@ -23,7 +30,28 @@ from music21 import bar as m21bar
 
 from .checks import bar_ticks, lead_in_ticks
 from .config import FLUTE_PROGRAM, PIANO_PROGRAM, TICKS_PER_BEAT as T
-from .model import Arrangement, QNote
+from .model import DOTTED_BEAT, QUARTER_BEAT, Arrangement, QNote
+
+D = DOTTED_BEAT       # the beat the page shows in 6/8, 9/8, 12/8 and 3/8 (18 ticks)
+
+
+@dataclass(frozen=True)
+class _Meter:
+    bpb: int          # beats per bar
+    beat: int         # ticks per beat: 12 (quarter), 18 (dotted quarter) or 6 (eighth)
+
+    @property
+    def bar(self) -> int:
+        return self.bpb * self.beat
+
+    @property
+    def compound(self) -> bool:
+        """Written in dotted-quarter beats (8ths in threes): 6/8, 9/8, 12/8, 3/8."""
+        return self.beat != QUARTER_BEAT
+
+
+def _meter_of(arr: Arrangement) -> _Meter:
+    return _Meter(arr.beats_per_bar, arr.beat_ticks)
 
 # ---------------------------------------------------------------- spelling
 
@@ -206,14 +234,15 @@ def _beat_grids(events: list[_Event]) -> dict[int, int]:
     return {b: (4 if trip > six else 3) for b, (six, trip) in votes.items()}
 
 
-def _tidy(events: list[_Event]) -> list[_Event]:
+def _tidy(events: list[_Event], compound: bool = False) -> list[_Event]:
     """Snap starts and ends onto the grid of the beat they fall in, so every
-    beat is either plain 16ths or 8th triplets (never a mix of the two)."""
-    grids = _beat_grids(events)
+    beat is either plain 16ths or 8th triplets (never a mix of the two).
+    Compound meters have no triplets: everything goes on the 16th grid."""
+    grids = {} if compound else _beat_grids(events)
 
     def snap(pos: int) -> int:
         b, off = divmod(pos, T)
-        g = grids.get(b, 4 if off in (4, 8) else 3)
+        g = grids.get(b, 4 if off in (4, 8) and not compound else 3)
         return b * T + round(off / g) * g
 
     snapped: dict[int, _Event] = {}
@@ -238,8 +267,51 @@ def _tidy(events: list[_Event]) -> list[_Event]:
 # ---------------------------------------------------------------- rhythm pieces
 
 
-def _piece(pos: int, left: int, bpb: int, rest: bool, trip_beat) -> int:
+def _piece(pos: int, left: int, m: _Meter, rest: bool, trip_beat) -> int:
     """Longest piece that may start at `pos` (ticks into the bar), at most `left` long."""
+    if m.compound:
+        return _compound_piece(pos, left, m.bar, rest)
+    return _simple_piece(pos, left, m.bpb, rest, trip_beat)
+
+
+# Inside one dotted-quarter beat: offset (ticks) -> note lengths that may start
+# there without crossing the beat. 0: quarter (+8th), dotted 8th (+16th+8th),
+# 8th, 16th; on the 2nd 8th a quarter fills the beat (8th + quarter); on a
+# 16th off the 8th grid a dotted 8th or 8th fills to an 8th or the beat.
+_IN_DOTTED_BEAT = {0: (12, 9, 6, 3), 3: (9, 6, 3), 6: (12, 6, 3), 9: (9, 6, 3),
+                   12: (6, 3), 15: (3,)}
+
+
+def _compound_piece(pos: int, left: int, bar: int, rest: bool) -> int:
+    """_piece for 6/8, 9/8, 12/8 and 3/8 (bars of dotted-quarter beats)."""
+    off = pos % D
+    cands: list[int] = []
+    if rest:
+        if off == 0:
+            if bar == 4 * D and pos % (2 * D) == 0:
+                cands.append(2 * D)        # dotted half rest: half a bar of 12/8
+            cands += [D, 12]               # a whole beat; a quarter rest for two 8ths
+        if off % 6 == 0:
+            cands.append(6)
+        if off % 3 == 0:
+            cands.append(3)
+    else:
+        if off == 0:
+            for d in (4 * D, 2 * D, D):    # dotted whole, dotted half, dotted quarter
+                if pos + d <= bar and (d != 4 * D or pos == 0):
+                    cands.append(d)
+        cands += _IN_DOTTED_BEAT.get(off, ())
+    cands = [d for d in cands if d <= left]
+    if cands:
+        return max(cands)
+    for d in (6, 3, 2, 1):                 # off the grid (should not happen after _tidy)
+        if d <= left and off + d <= D:
+            return d
+    return 1
+
+
+def _simple_piece(pos: int, left: int, bpb: int, rest: bool, trip_beat) -> int:
+    """_piece for 2/4, 3/4 and 4/4 (bars of quarter beats)."""
     off = pos % T
     beat = pos // T
     bar = bpb * T
@@ -289,9 +361,9 @@ def _piece(pos: int, left: int, bpb: int, rest: bool, trip_beat) -> int:
     return 1
 
 
-def _pieces(start: int, end: int, bpb: int, rest: bool, trip_beats: set[int]):
+def _pieces(start: int, end: int, m: _Meter, rest: bool, trip_beats: set[int]):
     """Split [start, end) into notated pieces: [(start, dur, whole_bar_rest)]."""
-    bar = bpb * T
+    bar = m.bar
     out = []
     s = start
     while s < end:
@@ -302,7 +374,7 @@ def _pieces(start: int, end: int, bpb: int, rest: bool, trip_beats: set[int]):
         else:
             pos = s - b0
             while b0 + pos < seg_end:
-                d = _piece(pos, seg_end - b0 - pos, bpb, rest,
+                d = _piece(pos, seg_end - b0 - pos, m, rest,
                            lambda beat: (b0 // T + beat) in trip_beats)
                 out.append((b0 + pos, d, False))
                 pos += d
@@ -319,9 +391,10 @@ def _ql(ticks: int) -> Fraction:
 
 def _fill_measures(part: stream.Stream, events: list[_Event], n_bars: int, arr: Arrangement,
                    staff_clef, top: bool, compress_rests: bool = False) -> None:
-    bpb = arr.beats_per_bar
-    bar = bpb * T
-    trip_beats = {pos // T for e in events for pos in (e.start, e.end) if pos % T in (4, 8)}
+    mtr = _meter_of(arr)
+    bar = mtr.bar
+    trip_beats = set() if mtr.compound else {
+        pos // T for e in events for pos in (e.start, e.end) if pos % T in (4, 8)}
     measures = [stream.Measure(number=i + 1) for i in range(n_bars)]
 
     def put(s: int, el) -> None:
@@ -329,7 +402,7 @@ def _fill_measures(part: stream.Stream, events: list[_Event], n_bars: int, arr: 
         m.insert(_ql(s % bar), el)
 
     def rests(a: int, b: int) -> None:
-        for s, d, whole in _pieces(a, b, bpb, True, trip_beats):
+        for s, d, whole in _pieces(a, b, mtr, True, trip_beats):
             r = note.Rest(quarterLength=_ql(d))
             if whole:
                 r.fullMeasure = True
@@ -339,7 +412,7 @@ def _fill_measures(part: stream.Stream, events: list[_Event], n_bars: int, arr: 
     for e in events:
         if e.start > cursor:
             rests(cursor, e.start)
-        pieces = _pieces(e.start, e.end, bpb, False, trip_beats)
+        pieces = _pieces(e.start, e.end, mtr, False, trip_beats)
         for i, (s, d, _) in enumerate(pieces):
             if len(e.pitches) == 1:
                 el = note.Note(spell(e.pitches[0], arr.key_fifths, arr.key_mode, e.direction))
@@ -360,9 +433,11 @@ def _fill_measures(part: stream.Stream, events: list[_Event], n_bars: int, arr: 
     first = measures[0]
     first.insert(0, staff_clef)
     first.insert(0, key.KeySignature(max(-7, min(7, arr.key_fifths))).asKey(arr.key_mode))
-    first.insert(0, meter.TimeSignature(f"{bpb}/4"))
-    if top:
-        first.insert(0, tempo.MetronomeMark(number=_bpm(arr), referent=duration.Duration(1.0)))
+    num, den = arr.time_signature
+    first.insert(0, meter.TimeSignature(f"{num}/{den}"))
+    if top:   # the beat the tempo counts: a quarter, dotted quarter or eighth
+        first.insert(0, tempo.MetronomeMark(number=_bpm(arr),
+                                            referent=duration.Duration(_ql(arr.beat_ticks))))
     measures[-1].rightBarline = m21bar.Barline("final")
     for m in measures:
         part.append(m)
@@ -417,9 +492,10 @@ class _Layout:
 
 def _layout(arr: Arrangement) -> _Layout:
     shift = lead_in_ticks(arr)
-    flute = _tidy(_line_events(arr.flute, shift))
-    rh = _tidy(_chord_events(arr.rh, shift, arr.flute))
-    lh = _tidy(_chord_events(arr.lh, shift, arr.flute))
+    compound = _meter_of(arr).compound
+    flute = _tidy(_line_events(arr.flute, shift), compound)
+    rh = _tidy(_chord_events(arr.rh, shift, arr.flute), compound)
+    lh = _tidy(_chord_events(arr.lh, shift, arr.flute), compound)
     last = max((e.end for e in (*flute, *rh, *lh)), default=0)
     bar = bar_ticks(arr)
     return _Layout(flute, rh, lh, max(1, -(-last // bar)), shift)
@@ -479,10 +555,10 @@ def _key_number(fifths: int, mode: str) -> int:
 
 
 def _write_midi(arr: Arrangement, lay: _Layout, path: Path) -> None:
-    bpm = _bpm(arr)
-    sec = 60.0 / bpm / T
-    pm = pretty_midi.PrettyMIDI(initial_tempo=bpm)
-    pm.time_signature_changes.append(pretty_midi.TimeSignature(arr.beats_per_bar, 4, 0.0))
+    bpm = _bpm(arr)                               # beats of arr.beat_ticks per minute
+    sec = 60.0 / bpm / arr.beat_ticks
+    pm = pretty_midi.PrettyMIDI(initial_tempo=bpm * arr.beat_ticks / T)   # quarters per minute
+    pm.time_signature_changes.append(pretty_midi.TimeSignature(*arr.time_signature, 0.0))
     pm.key_signature_changes.append(
         pretty_midi.KeySignature(_key_number(max(-7, min(7, arr.key_fifths)), arr.key_mode), 0.0))
     parts = [("Flute", FLUTE_PROGRAM, lay.flute)]

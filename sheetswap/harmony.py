@@ -433,7 +433,7 @@ def harmonize(notes: list[Note], grid: BeatGrid, bass: list[Note] | None = None,
     follow, in which case the tune is harmonized wherever it plays. With no
     accompaniment at all (a voice alone, a melody-only MIDI file) the tune is
     harmonized, so the flute still gets a supporting piano part."""
-    bar = grid.beats_per_bar * T
+    bar = grid.bar_ticks
     acc = _ticks(list(notes), grid)
     low_part = _ticks(list(bass or []), grid)
     rows = acc + low_part
@@ -565,7 +565,7 @@ def detect_chords(notes: list[Note], grid: BeatGrid, span: int = T,
     """(start_tick, dur_ticks, root_pc, quality), a chord changing at most
     every `span` ticks. The same chord in a row inside one bar is one row;
     rows never cross a bar line, so the chord is struck again each bar."""
-    bar = grid.beats_per_bar * T
+    bar = grid.bar_ticks
     rows: list[list] = []
     for c in harmonize(notes, grid, bass, melody, key, unit=span):
         if rows:

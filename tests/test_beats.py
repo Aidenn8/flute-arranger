@@ -223,9 +223,22 @@ def test_grid_from_midi_three_four():
     _assert_covers(g, 10.0)
 
 
-def test_grid_from_midi_defaults_to_four():
-    assert grid_from_midi(_midi(None)).beats_per_bar == 4
-    assert grid_from_midi(_midi(6, 8)).beats_per_bar == 4
+def test_grid_from_midi_time_signatures():
+    def shape(num, den):
+        g = grid_from_midi(_midi(num, den))
+        return g.beats_per_bar, g.beat_ticks
+    assert shape(None, 4) == (4, 12)                 # no signature: 4/4
+    assert shape(2, 4) == (2, 12)
+    assert shape(4, 4) == (4, 12)
+    assert shape(6, 8) == (2, 18)                    # dotted-quarter beats
+    assert shape(9, 8) == (3, 18)
+    assert shape(12, 8) == (4, 18)
+    assert shape(3, 8) == (3, 6)                     # eighth beats
+    assert shape(5, 4) == (4, 12)                    # anything else: as before
+    # pretty_midi's 6/8 beats are dotted quarters: 100 quarters a minute = 66.7 beats
+    g = grid_from_midi(_midi(6, 8, tempo=100))
+    assert abs(g.bpm() - 100 / 1.5) < 0.5
+    assert abs(g.to_ticks(0.6) - 12) < 1e-6          # a quarter note (0.6 s) is 12 ticks
 
 
 def test_grid_from_midi_pickup():
@@ -256,3 +269,114 @@ def test_melody_long_notes_place_beat_one():
     assert g.first_downbeat == 2
     even = [Note(72, i * 0.5, i * 0.5 + 0.45, 80) for i in range(36)]
     assert melody_downbeat(even, grid, 0.0) is grid      # no evidence: unchanged
+    one = BeatGrid(grid.beats, 1, 0, 18)                 # 3/8 a dotted beat a bar: no choice
+    assert melody_downbeat(mel, one, 1.0) is one
+
+
+# ---------------------------------------------------------------- beat subdivision
+
+def _tune(patterns, period, bpb=4, jitter=0.03, seed=0, n_beats=32):
+    """A melody on a steady grid: beat i plays the onsets (fractions of a beat)
+    in patterns[i % len(patterns)], each late or early by up to `jitter` beats."""
+    from sheetswap.model import BeatGrid, Note
+    rng = np.random.default_rng(seed)
+    grid = BeatGrid([i * period for i in range(n_beats + 4)], bpb, 0)
+    notes = []
+    for i in range(n_beats):
+        offs = patterns[i % len(patterns)]
+        ends = list(offs[1:]) + [1.0]
+        for f, g in zip(offs, ends):
+            t = (i + f + rng.uniform(-jitter, jitter)) * period
+            notes.append(Note(72 + i % 5, t, (i + g) * period - 0.02, 80))
+    return notes, grid
+
+
+JIG = [(0, 1 / 3, 2 / 3), (0, 2 / 3), (0, 1 / 3, 2 / 3), (0,)]          # 6/8: 8ths, quarter-8th
+MARCH = [(0, 1 / 2), (0,), (0, 1 / 4, 1 / 2, 3 / 4), (0, 3 / 4)]          # 4/4: 8ths, 16ths, dotted
+SICILIANO = [(0, 1 / 2, 2 / 3), (0,)]                                    # dotted 8th, 16th, 8th
+
+
+def test_subdivision_jig_vs_march():
+    from sheetswap.beats import beat_subdivision, beat_unit
+    jig, g = _tune(JIG, period=0.6)
+    assert beat_subdivision(jig, g) == 3 and beat_unit(jig, g) == 18
+    march, g = _tune(MARCH, period=0.5)
+    assert beat_subdivision(march, g) == 2 and beat_unit(march, g) == 12
+    sic, g = _tune(SICILIANO, period=0.9)
+    assert beat_subdivision(sic, g) == 3
+    # the grid's downbeat doesn't change where notes fall inside a beat
+    g.first_downbeat = 3
+    assert beat_subdivision(sic, g) == 3
+
+
+def test_subdivision_ignores_a_lagging_grid():
+    # tracked beats often come ~1/8 beat after the tune's notes: plain 8ths
+    # would then sit near 1/3 of a beat, 8ths of a jig near 1/4
+    from sheetswap.beats import beat_subdivision
+    for pattern, period, want in ((MARCH, 0.5, 2), (JIG, 0.6, 3)):
+        for lag in (-0.12, 0.12):
+            notes, g = _tune(pattern, period)
+            g.beats = [b + lag * period for b in g.beats]
+            assert beat_subdivision(notes, g) == want, (want, lag)
+
+
+def test_subdivision_needs_enough_beats_in_three():
+    from sheetswap.beats import COMPOUND_MIN_BEATS, COMPOUND_SHARE, beat_subdivision
+    # a 4/4 tune of 8ths with a triplet every 4th beat: triplets stay a minority
+    some, g = _tune([(0, 1 / 2), (0, 1 / 2), (0, 1 / 3, 2 / 3), (0,)], period=0.5)
+    assert 1 / 3 < COMPOUND_SHARE and beat_subdivision(some, g) == 2
+    # all triplets, but too few of them to judge
+    few, g = _tune([(0, 1 / 3, 2 / 3)], period=0.5, n_beats=COMPOUND_MIN_BEATS - 1)
+    assert beat_subdivision(few, g) == 2
+    enough, g = _tune([(0, 1 / 3, 2 / 3)], period=0.5, n_beats=COMPOUND_MIN_BEATS)
+    assert beat_subdivision(enough, g) == 3
+    # no notes between the beats: nothing says three
+    plain, g = _tune([(0,)], period=0.5)
+    assert beat_subdivision(plain, g) == 2
+    assert beat_subdivision([], g) == 2
+
+
+def test_fast_three_beat_bars_in_two_become_eighth_beats():
+    from sheetswap.beats import EIGHTH_BEAT_BPM, beat_unit
+    elise = [(0, 1 / 2), (0, 1 / 2), (0, 1 / 2)]            # running 16ths of 3/8
+    fast = 60 / (EIGHTH_BEAT_BPM + 10)
+    slow = 60 / (EIGHTH_BEAT_BPM - 10)
+    notes, g = _tune(elise, period=fast, bpb=3)
+    assert beat_unit(notes, g) == 6                          # 3/8 in eighth beats
+    notes, g = _tune(elise, period=slow, bpb=3)
+    assert beat_unit(notes, g) == 12                         # a minuet in 3/4
+    notes, g = _tune(elise, period=fast, bpb=4)
+    assert beat_unit(notes, g) == 12                         # bars of four: stays 4/4
+    notes, g = _tune([(0,), (0,), (0,)], period=fast, bpb=3)
+    assert beat_unit(notes, g) == 12                         # a fast waltz on the beats
+    # a neural tracker puts Für Elise at exactly 150 eighths a minute
+    assert EIGHTH_BEAT_BPM <= 130
+    notes, g = _tune(elise, period=60 / 150, bpb=3)
+    assert abs(g.bpm() - 150) < 1e-6 and beat_unit(notes, g) == 6
+
+
+def test_accompaniment_settles_an_ambiguous_tune():
+    # a 12/8 nocturne: the tune alone splits 39 beats in three, 29 in two
+    # (share 0.57, under COMPOUND_SHARE); the left hand's 8ths are in threes
+    from sheetswap.beats import COMPOUND_SHARE, _beat_splits, beat_subdivision, beat_unit
+    tune_pat = [(0, 1 / 3, 2 / 3)] * 39 + [(0, 1 / 2)] * 29 + [(0,)] * 12
+    tune, g = _tune(tune_pat, period=60 / 39.5, n_beats=len(tune_pat))
+    [(three, two, _)] = _beat_splits([tune], g)
+    assert (three, two) == (39, 29) and three < COMPOUND_SHARE * (three + two)
+    assert beat_subdivision(tune, g) == 2
+    left, _ = _tune([(0, 1 / 3, 2 / 3)], period=60 / 39.5, n_beats=len(tune_pat), seed=1)
+    assert beat_subdivision(tune, g, accompaniment=left) == 3
+    assert beat_unit(tune, g, left) == 18
+    # a simple-time piece (Träumerei-like) keeps its 8ths with any accompaniment
+    march, g = _tune(MARCH, period=0.8)
+    eighths, _ = _tune([(0, 1 / 2)], period=0.8, seed=2)
+    assert beat_subdivision(march, g, accompaniment=eighths) == 2
+    assert beat_subdivision(march, g, accompaniment=[]) == 2
+    # Ave Maria: a tune in 8ths and dotted rhythms over triplets stays in simple time
+    ave = [(0, 1 / 2), (0, 3 / 4), (0,), (0, 1 / 3, 2 / 3)]
+    tune, g = _tune(ave, period=1.0, n_beats=48)
+    triplets, _ = _tune([(0, 1 / 3, 2 / 3)], period=1.0, n_beats=48, seed=3)
+    assert beat_subdivision(tune, g, accompaniment=triplets) == 2
+    # ...while a tune with no notes between the beats lets the accompaniment decide
+    held, g = _tune([(0,)], period=1.0, n_beats=48)
+    assert beat_subdivision(held, g, accompaniment=triplets) == 3

@@ -2,8 +2,12 @@
 
 Times come in two flavours:
 - Note: seconds, straight from the audio.
-- QNote: ticks on the beat grid (TICKS_PER_BEAT per quarter-note beat),
-  where tick 0 is the first downbeat. Negative ticks are a pickup.
+- QNote: ticks on the beat grid (TICKS_PER_BEAT per quarter note, whatever
+  the beat), where tick 0 is the first downbeat. Negative ticks are a pickup.
+
+The beat itself is a quarter (12 ticks: 2/4, 3/4, 4/4), a dotted quarter
+(18 ticks: 6/8, 9/8, 12/8, or one beat per bar of 3/8) or an eighth (6 ticks:
+3/8 counted in three).
 """
 from __future__ import annotations
 
@@ -15,6 +19,46 @@ from statistics import median
 from typing import Mapping
 
 from .config import TICKS_PER_BEAT
+
+QUARTER_BEAT = TICKS_PER_BEAT              # 12
+DOTTED_BEAT = TICKS_PER_BEAT * 3 // 2      # 18
+EIGHTH_BEAT = TICKS_PER_BEAT // 2          # 6
+
+# Time choices on the page: "auto" (as heard) or a time signature, as
+# (beats per bar, ticks per beat).
+METERS = {
+    "2/4": (2, QUARTER_BEAT), "3/4": (3, QUARTER_BEAT), "4/4": (4, QUARTER_BEAT),
+    "3/8": (3, EIGHTH_BEAT),
+    "6/8": (2, DOTTED_BEAT), "9/8": (3, DOTTED_BEAT), "12/8": (4, DOTTED_BEAT),
+}
+_OLD_METERS = {0: "auto", 2: "2/4", 3: "3/4", 4: "4/4"}   # before 6/8 etc. existed
+
+
+def time_signature(beats_per_bar: int, beat_ticks: int) -> tuple[int, int]:
+    """(numerator, denominator): dotted beats count three 8ths each (2 -> 6/8,
+    1 -> 3/8), eighth beats count 8ths (3 -> 3/8), quarter beats quarters."""
+    if beat_ticks == DOTTED_BEAT:
+        return beats_per_bar * 3, 8
+    if beat_ticks == EIGHTH_BEAT:
+        return beats_per_bar, 8
+    return beats_per_bar, 4
+
+
+def normalize_meter(value) -> str:
+    """A meter choice as "auto" or one of METERS' keys; anything else -> "auto".
+
+    The old numeric choices still work: 0 = as heard, 2/3/4 = beats per bar."""
+    if isinstance(value, str):
+        v = value.strip()
+        if v == "auto" or v in METERS:
+            return v
+        try:
+            value = int(v)
+        except ValueError:
+            return "auto"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return _OLD_METERS.get(value, "auto")
+    return "auto"
 
 
 @dataclass
@@ -47,6 +91,11 @@ class BeatGrid:
     beats: list[float]
     beats_per_bar: int = 4
     first_downbeat: int = 0
+    beat_ticks: int = QUARTER_BEAT      # 12 quarter, 18 dotted quarter, 6 eighth
+
+    @property
+    def bar_ticks(self) -> int:
+        return self.beats_per_bar * self.beat_ticks
 
     def _beats(self) -> list[float]:
         if len(self.beats) >= 2:
@@ -67,7 +116,7 @@ class BeatGrid:
         return idx - self.first_downbeat
 
     def to_ticks(self, t: float) -> float:
-        return self.to_beats(t) * TICKS_PER_BEAT
+        return self.to_beats(t) * self.beat_ticks
 
     def to_seconds(self, beat: float) -> float:
         """Inverse of to_beats."""
@@ -142,14 +191,18 @@ class ArrangeOptions:
     simple: bool = False
     easy_key: bool = False
     piano_style: str = "chords"
-    meter: int = 0                # 0 = as detected, else beats per bar (3 or 4)
+    meter: str = "auto"           # "auto" (as heard) or a key of METERS, e.g. "6/8"
     barshift: int = 0             # move the bar lines this many beats later (0-3)
     tempo: int = 0                # -1 = half as fast (beats twice as long), +1 = twice as fast
+
+    def __post_init__(self) -> None:
+        self.meter = normalize_meter(self.meter)
 
     def key(self) -> str:
         return (f"{self.mode}-{self.melody_source}-o{self.octave:+d}-"
                 f"{'simple' if self.simple else 'full'}-"
-                f"{'easy' if self.easy_key else 'orig'}-{self.piano_style}-m{self.meter}"
+                f"{'easy' if self.easy_key else 'orig'}-{self.piano_style}"
+                f"-m{self.meter.replace('/', '-')}"
                 f"-b{self.barshift}-t{self.tempo:+d}")
 
     @classmethod
@@ -163,11 +216,7 @@ class ArrangeOptions:
             opts.octave = max(-1, min(1, int(d.get("octave", 0))))
         except (TypeError, ValueError):
             opts.octave = 0
-        try:
-            m = int(d.get("meter", 0))
-            opts.meter = m if m in (0, 3, 4) else 0
-        except (TypeError, ValueError):
-            opts.meter = 0
+        opts.meter = normalize_meter(d.get("meter", "auto"))
         try:
             b = int(d.get("barshift", 0))
             opts.barshift = b if 0 <= b <= 3 else 0
@@ -189,8 +238,17 @@ class Arrangement:
     rh: list[QNote] = field(default_factory=list)
     lh: list[QNote] = field(default_factory=list)
     beats_per_bar: int = 4
-    bpm: float = 100.0
+    bpm: float = 100.0            # beats (beat_ticks long) per minute
     key_fifths: int = 0
     key_mode: str = "major"
     shift: int = 0
     warnings: list[str] = field(default_factory=list)
+    beat_ticks: int = QUARTER_BEAT
+
+    @property
+    def bar_ticks(self) -> int:
+        return self.beats_per_bar * self.beat_ticks
+
+    @property
+    def time_signature(self) -> tuple[int, int]:
+        return time_signature(self.beats_per_bar, self.beat_ticks)

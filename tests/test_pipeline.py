@@ -99,7 +99,7 @@ def test_easy_key_and_octave_options(tmp_path):
     assert {q.pitch for q in up.flute} != {q.pitch for q in lo.flute}
     for arr in (up, lo):
         assert all(FLUTE_HARD[0] <= q.pitch <= FLUTE_HARD[1] for q in arr.flute)
-    three = pipeline.arrange(an, ArrangeOptions(meter=3))
+    three = pipeline.arrange(an, ArrangeOptions(meter="3/4"))
     assert three.beats_per_bar == 3 and base.beats_per_bar == 4
     shifted = pipeline.arrange(an, ArrangeOptions(barshift=1))
     assert [q.start for q in shifted.flute] == [q.start - 12 for q in base.flute]
@@ -183,3 +183,138 @@ def test_empty_midi_raises(tmp_path):
     pretty_midi.PrettyMIDI().write(str(d / "input.mid"))
     with pytest.raises(ValueError):
         pipeline.analyze(d)
+
+
+# ---------------------------------------------------------------- compound meters
+
+# A jig in 6/8, in 8ths (3 = a dotted quarter): an 8th pickup, then 8 bars.
+JIG = [(74, 1),
+       (79, 1), (78, 1), (79, 1), (81, 2), (79, 1),      # bar 1: 8th 8th 8th | quarter 8th
+       (78, 3), (76, 1), (74, 1), (76, 1),               # bar 2: dotted quarter | 8th 8th 8th
+       (79, 1), (81, 1), (83, 1), (84, 3),
+       (83, 2), (81, 1), (79, 3),
+       (79, 1), (78, 1), (79, 1), (81, 2), (79, 1),
+       (78, 3), (76, 1), (74, 1), (76, 1),
+       (79, 1), (81, 1), (83, 1), (81, 1), (79, 1), (78, 1),
+       (79, 6)]
+
+
+def _midi_song(tmp_path, tune, num, den, quarter_bpm, name="jig"):
+    """A melody (pitch, length in 8ths) whose first note is a one-8th pickup
+    to bar 2, in the given time signature, over a held bass note a bar."""
+    pm = pretty_midi.PrettyMIDI(initial_tempo=quarter_bpm)
+    pm.time_signature_changes.append(pretty_midi.TimeSignature(num, den, 0.0))
+    eighth = 30 / quarter_bpm
+    bar = num * eighth * (8 // den)
+    mel = pretty_midi.Instrument(program=73, name="Flute")
+    t = bar - eighth
+    for p, n in tune:
+        mel.notes.append(pretty_midi.Note(90, p, t, t + n * eighth - 0.02))
+        t += n * eighth
+    acc = pretty_midi.Instrument(program=0, name="Piano")
+    b = bar
+    while b < t - 1e-6:
+        acc.notes.append(pretty_midi.Note(60, 43, b, min(b + bar, t) - 0.02))
+        b += bar
+    pm.instruments += [mel, acc]
+    d = tmp_path / name
+    d.mkdir()
+    pm.write(str(d / "input.mid"))
+    (d / "meta.json").write_text(json.dumps({"title": name}))
+    return d
+
+
+def test_six_eight_midi_end_to_end(tmp_path):
+    from music21 import converter, stream
+    d = _midi_song(tmp_path, JIG, 6, 8, quarter_bpm=150)      # dotted quarter = 100
+    an = pipeline.analyze(d)
+    assert (an.grid.beats_per_bar, an.grid.beat_ticks) == (2, 18)
+    for mode in ("solo", "duet"):
+        res = pipeline.arrange_and_render(d, ArrangeOptions(mode=mode))
+        arr = res["arr"]
+        assert arr.time_signature == (6, 8) and arr.bpm == 100
+        assert res["warnings"] == []
+        assert res["svgs"] and "<svg" in res["svgs"][0]
+        # one 8th = 6 ticks, written exactly as the file has it
+        starts, t = [], -6
+        for _, n in JIG:
+            starts.append(t)
+            t += 6 * n
+        assert [q.start for q in arr.flute] == starts
+        xml = res["musicxml"].read_text()
+        assert "<beats>6</beats>" in xml and "<beat-type>8</beat-type>" in xml
+        assert "<beat-unit>quarter</beat-unit>" in xml and "<beat-unit-dot" in xml
+        back = converter.parse(res["musicxml"])
+        for part in back.parts:
+            for m in part.getElementsByClass(stream.Measure):
+                assert m.duration.quarterLength == 3.0, (mode, part, m.number)
+        played = pretty_midi.PrettyMIDI(str(res["midi"]))
+        sig = played.time_signature_changes[0]
+        assert (sig.numerator, sig.denominator) == (6, 8)
+        flute = sorted((n for i in played.instruments if i.program == 73 for n in i.notes),
+                       key=lambda n: n.start)
+        # same speed as the file: the pickup sits an 8th (0.2 s) before bar 2
+        assert abs(flute[1].start - flute[0].start - 0.2) < 1e-3
+        if mode == "duet":
+            assert arr.rh or arr.lh
+
+
+def test_three_eight_midi_uses_eighth_beats(tmp_path):
+    tune = [(76, 1)] + [(75, 1), (76, 1), (75, 1), (76, 1), (71, 1), (74, 1), (72, 1), (69, 3),
+                        (76, 1)] * 3
+    d = _midi_song(tmp_path, tune, 3, 8, quarter_bpm=72, name="elise")   # 8th = 144
+    an = pipeline.analyze(d)
+    assert (an.grid.beats_per_bar, an.grid.beat_ticks) == (3, 6)
+    res = pipeline.arrange_and_render(d, ArrangeOptions())
+    arr = res["arr"]
+    assert arr.time_signature == (3, 8) and arr.bpm == 144
+    xml = res["musicxml"].read_text()
+    assert "<beats>3</beats>" in xml and "<beat-type>8</beat-type>" in xml
+    assert "<beat-unit>eighth</beat-unit>" in xml
+    assert all(q.start % 6 == 0 for q in arr.flute)
+    # asked for 6/8 instead: the same music in bars twice as long
+    six = pipeline.arrange(an, ArrangeOptions(meter="6/8"))
+    assert six.time_signature == (6, 8) and six.bpm == 48
+    assert [q.start for q in six.flute] == [q.start for q in arr.flute]
+
+
+def test_meter_choice_reads_the_same_beats():
+    g = BeatGrid([i * 0.5 for i in range(24)], 4, 0)                 # quarter beats
+    six = pipeline.apply_meter(g, "6/8", [], detect=False)
+    assert (six.beats_per_bar, six.beat_ticks, six.beats) == (2, 18, g.beats)
+    assert (pipeline.apply_meter(g, "3/8", [], False).beat_ticks,
+            pipeline.apply_meter(g, "3/8", [], False).beats_per_bar) == (6, 3)
+    assert pipeline.apply_meter(g, "2/4", [], False).beats_per_bar == 2
+    assert pipeline.apply_meter(g, "auto", [], False) is g          # a MIDI file's own meter
+    dotted = BeatGrid(g.beats, 4, 0, 18)
+    assert pipeline.apply_meter(dotted, "3/4", [], False).beat_ticks == 12
+    one = pipeline.apply_meter(dotted, "3/8", [], False)             # a dotted beat a bar
+    assert (one.beats_per_bar, one.beat_ticks) == (1, 18)
+    eighths = BeatGrid(g.beats, 3, 4, 6)                             # 3/8, bar 1 at beat 4
+    joined = pipeline.apply_meter(eighths, "6/8", [], False)
+    assert (joined.beats_per_bar, joined.beat_ticks) == (2, 18)
+    assert joined.beats == g.beats[1::3] and joined.to_seconds(0) == eighths.to_seconds(0)
+    assert abs(joined.bpm() - eighths.bpm() / 3) < 1e-6
+
+
+def test_auto_meter_hears_compound_audio():
+    # an audio analysis (quarter-beat grid from the tracker) of a tune in threes
+    beat = 0.6
+    tune = []
+    for i in range(32):
+        offs = ((0, 1 / 3, 2 / 3), (0, 2 / 3))[i % 2]
+        for f in offs:
+            tune.append(Note(72 + (i + int(3 * f)) % 7, (i + f) * beat, (i + f) * beat + 0.18, 90))
+    an = Analysis("x", "piano", 20.0, BeatGrid([i * beat for i in range(36)], 4, 0), {"piano": tune})
+    arr = pipeline.arrange(an, ArrangeOptions())
+    assert arr.beat_ticks == 18 and arr.time_signature == (12, 8)
+    assert all(q.start % 6 == 0 for q in arr.flute)                  # plain 8ths, no triplets
+    four = pipeline.arrange(an, ArrangeOptions(meter="4/4"))         # the user knows better
+    assert four.beat_ticks == 12 and any(q.start % 4 == 0 and q.start % 3 for q in four.flute)
+
+
+def test_meter_six_eight_on_a_four_four_file(tmp_path):
+    an = pipeline.analyze(_song(tmp_path))
+    six = pipeline.arrange(an, ArrangeOptions(meter="6/8"))
+    assert six.time_signature == (6, 8)
+    assert [q.dur for q in six.flute][:4] == [18] * 4                # each beat a dotted quarter

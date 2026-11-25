@@ -3,14 +3,14 @@ from __future__ import annotations
 
 from bisect import bisect_left
 
-from .config import FLUTE_HARD, TICKS_PER_BEAT
+from .config import FLUTE_HARD
 from .model import Arrangement, QNote
 
 _NAMES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
 
 
 def bar_ticks(arr: Arrangement) -> int:
-    return arr.beats_per_bar * TICKS_PER_BEAT
+    return arr.bar_ticks
 
 
 def lead_in_ticks(arr: Arrangement) -> int:

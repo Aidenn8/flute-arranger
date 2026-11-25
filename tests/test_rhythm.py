@@ -211,3 +211,86 @@ def test_dotted_rhythm_with_two_notes_in_a_beat_is_kept():
     notes = [Note(72, 0.0, 0.37), Note(74, 0.375, 0.5), Note(76, 0.5, 1.0)]   # dotted 8th + 16th
     q = quantize_line(notes, g)
     assert [(n.start, n.dur) for n in q][:2] == [(0, 9), (9, 3)]
+
+
+# ---------------------------------------------------------------- compound and 8th beats
+
+def _six_eight(period=0.6, n=40, bpb=2, first=0):
+    """Dotted-quarter beats (6/8 with bpb=2)."""
+    return BeatGrid([period * i for i in range(n)], bpb, first, beat_ticks=18)
+
+
+def test_compound_three_even_notes_are_plain_eighths():
+    # three notes a beat (what 4/4 would write as 8th triplets) in 6/8: plain 8ths
+    g = _six_eight(0.6)
+    rng = np.random.default_rng(5)
+    notes = []
+    for i in range(12):
+        t = 0.2 * i + rng.uniform(-0.015, 0.015)
+        notes.append(Note(72 + i % 4, t, t + 0.18))
+    q = quantize_line(notes, g)
+    assert [n.start for n in q] == [6 * i for i in range(12)]
+    assert all(n.dur == 6 for n in q)
+
+
+def test_compound_quarter_eighth_and_sixteenths():
+    g = _six_eight(0.6)
+    # beat 0: quarter + 8th; beat 1: six 16ths; beat 2: dotted 8th, 16th, 8th (siciliano)
+    times = [0.0, 0.4, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5, 1.6]
+    notes = [Note(74, t, t + 0.09) for t in times]
+    q = quantize_line(notes, g)
+    assert [n.start for n in q] == [0, 12, 18, 21, 24, 27, 30, 33, 36, 45, 48]
+    _check_line(q, 3)
+    assert all(n.start % 3 == 0 for n in q)
+
+
+def test_compound_long_note_snaps_to_the_dotted_beat():
+    g = _six_eight(0.6)
+    # held notes started a little early / late (0.1 beat) land on the beat
+    notes = [Note(72, 0.0, 0.55), Note(74, 0.54, 1.15), Note(76, 1.27, 1.75)]
+    q = quantize_line(notes, g)
+    assert [(n.start, n.dur) for n in q] == [(0, 18), (18, 18), (36, 18)]
+    # one that really starts on the 2nd 8th stays there
+    q = quantize_line([Note(72, 0.2, 0.6), Note(74, 0.6, 1.1)], g)
+    assert q[0].start == 6
+
+
+def test_compound_never_uses_triplets():
+    g = BeatGrid([0.55 * i + 0.01 * np.sin(i) for i in range(80)], 4, 1, beat_ticks=18)
+    rng = np.random.default_rng(6)
+    t, notes = 0.3, []
+    while t < 40:
+        d = rng.uniform(0.03, 0.9)
+        notes.append(Note(int(rng.integers(60, 90)), t, t + d, int(rng.integers(1, 127))))
+        t += d * rng.uniform(0.6, 1.6)
+    for simple in (False, True):
+        q = quantize_line(notes, g, simple=simple)
+        _check_line(q, 6 if simple else 3)
+        assert all(n.start % (6 if simple else 3) == 0 for n in q)
+        assert all(n.end % 3 == 0 for n in q)
+
+
+def test_eighth_beats_split_in_sixteenths():
+    # 3/8 counted in three 8th beats (0.4 s each): 16ths fall on half beats
+    g = BeatGrid([0.4 * i for i in range(40)], 3, 0, beat_ticks=6)
+    times = [0.0, 0.2, 0.4, 0.6, 0.8, 1.2, 1.4, 1.6]
+    q = quantize_line([Note(76, t, t + 0.18) for t in times], g)
+    assert [n.start for n in q] == [0, 3, 6, 9, 12, 18, 21, 24]
+    assert all(n.start % 3 == 0 for n in q)
+    # a long note a little late lands on its beat
+    q = quantize_line([Note(76, 0.03, 0.9), Note(77, 1.2, 1.6)], g)
+    assert q[0].start == 0 and q[1].start == 18
+
+
+def test_breath_marks_compound_and_short_bars():
+    # 6/8 has two beats a bar, like 2/4: windows of 4 bars (8 dotted quarters)
+    out = add_breath_marks(_line([18] * 24), 2, 18)     # 12 bars of dotted quarters
+    assert [n.end for n in out if n.breath_after] == [144, 288]
+    # 9/8 and 12/8 count like 3/4 and 4/4: windows of 2 bars
+    out = add_breath_marks(_line([18] * 24), 3, 18)     # 8 bars of 9/8
+    assert [n.end for n in out if n.breath_after] == [108, 216, 324]
+    # 3/8 (one felt beat a bar) and 2/4: windows of 4 bars
+    out = add_breath_marks(_line([6] * 48), 3, 6)       # 16 bars of 8ths
+    assert [n.end for n in out if n.breath_after] == [72, 144, 216]
+    out = add_breath_marks(_line([12] * 32), 2)         # 16 bars of 2/4
+    assert [n.end for n in out if n.breath_after] == [96, 192, 288]

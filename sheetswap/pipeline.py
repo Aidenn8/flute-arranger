@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
 
-from .model import Analysis, ArrangeOptions, Arrangement, BeatGrid, Note, QNote
+from .model import (DOTTED_BEAT, EIGHTH_BEAT, METERS, Analysis, ArrangeOptions, Arrangement,
+                    BeatGrid, Note, QNote)
 
 ProgressFn = Callable[[int, int, str], None]
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus", ".webm", ".aiff", ".aif"}
@@ -233,26 +234,60 @@ def rescale_tempo(grid: BeatGrid, tempo: int) -> BeatGrid:
     """
     b = list(grid.beats)
     if tempo < 0 and len(b) >= 4:
-        off = grid.first_downbeat % 2
-        return BeatGrid(b[off::2], grid.beats_per_bar, (grid.first_downbeat - off) // 2)
+        return _group_beats(grid, 2)
     if tempo > 0 and len(b) >= 2:
         doubled = [t for a, c in zip(b, b[1:]) for t in (a, (a + c) / 2)] + [b[-1]]
-        return BeatGrid(doubled, grid.beats_per_bar, grid.first_downbeat * 2)
+        return replace(grid, beats=doubled, first_downbeat=grid.first_downbeat * 2)
     return grid
 
 
-def bar_grid(an: Analysis, opts: ArrangeOptions, melody: list[Note]) -> BeatGrid:
+def _group_beats(grid: BeatGrid, k: int) -> BeatGrid:
+    """Every k-th beat, counted from the first downbeat (which stays put)."""
+    off = grid.first_downbeat % k
+    return replace(grid, beats=list(grid.beats)[off::k], first_downbeat=(grid.first_downbeat - off) // k)
+
+
+def apply_meter(grid: BeatGrid, meter: str, melody: list[Note], detect: bool,
+                accompaniment: list[Note] | None = None) -> BeatGrid:
+    """The grid's beats written in the chosen meter ("auto" or a key of METERS).
+
+    "auto" keeps a MIDI file's own time signature (detect=False); for audio
+    the beat's length comes from the tune and its accompaniment
+    (beats.beat_unit: music in threes gets dotted-quarter beats, written 9/8
+    or 12/8 for 3 or 4 beats a bar; fast 3-beat bars split in two get 8th beats).
+    A chosen time signature reads the same beats in its own unit: 6/8 makes
+    each beat a dotted quarter, 3/4 a quarter, 3/8 an eighth (dotted-quarter
+    beats become one bar of 3/8 each). Eighth beats (a 3/8 file) asked to be
+    6/8, 9/8 or 12/8 are joined three to a dotted beat instead.
+    """
+    from .beats import beat_unit
+
+    if meter not in METERS:
+        if detect:
+            return replace(grid, beat_ticks=beat_unit(melody, grid, accompaniment))
+        return grid
+    bpb, unit = METERS[meter]
+    if meter == "3/8" and grid.beat_ticks == DOTTED_BEAT:
+        bpb, unit = 1, DOTTED_BEAT
+    if unit == DOTTED_BEAT and grid.beat_ticks == EIGHTH_BEAT and len(grid.beats) >= 6:
+        grid = _group_beats(grid, 3)
+    return replace(grid, beats_per_bar=bpb, beat_ticks=unit)
+
+
+def bar_grid(an: Analysis, opts: ArrangeOptions, melody: list[Note],
+             accompaniment: list[Note] | None = None) -> BeatGrid:
     """The beat grid the score is written on: tempo and meter choices, then bar lines.
 
     For audio, beat 1 is placed where the tune's long notes fall (a MIDI file's
     own bar lines are kept); the user's bar-line shift comes on top, keeping
     the pickup shorter than a bar (3 beats later = 1 beat earlier).
+    `accompaniment` (notes besides the tune) helps tell 6/8 from 4/4.
     """
     from .beats import melody_downbeat
 
     grid = rescale_tempo(an.grid, opts.tempo)
-    bpb = opts.meter if opts.meter in (3, 4) else grid.beats_per_bar
-    grid = BeatGrid(grid.beats, bpb, grid.first_downbeat)
+    grid = apply_meter(grid, opts.meter, melody, an.kind != "midi", accompaniment)
+    bpb = grid.beats_per_bar
     starts = [n.start for ns in an.sources.values() for n in ns]
     if an.kind != "midi" and starts:
         accomp = an.sources.get("bass") or [n for n in an.sources.get("piano", []) if n.pitch < 55]
@@ -263,7 +298,7 @@ def bar_grid(an: Analysis, opts: ArrangeOptions, melody: list[Note]) -> BeatGrid
             first_note_beat = int(np.floor(grid.to_beats(min(starts)))) + grid.first_downbeat
             while first - bpb >= first_note_beat:
                 first -= bpb
-        grid = BeatGrid(grid.beats, bpb, first)
+        grid = replace(grid, first_downbeat=first)
     return grid
 
 
@@ -275,7 +310,8 @@ def arrange(an: Analysis, opts: ArrangeOptions) -> Arrangement:
     from .checks import check_arrangement
 
     melody, used, warnings = pick_melody(an, opts.melody_source)
-    grid = bar_grid(an, opts, melody)
+    pool, bass = _accompaniment_pool(an, used, melody)
+    grid = bar_grid(an, opts, melody, pool + (bass or []))
     line = quantize_line(melody, grid, simple=opts.simple)
 
     everything = [n for notes in an.sources.values() for n in notes]
@@ -289,20 +325,19 @@ def arrange(an: Analysis, opts: ArrangeOptions) -> Arrangement:
             line = [QNote(q.pitch + shift, q.start, q.dur, q.velocity, q.breath_after) for q in line]
             fifths = key_after_shift(fifths, shift)
 
-    line, _octaves = fit_to_flute(line, opts.octave)
-    line = add_breath_marks(line, grid.beats_per_bar)
+    line, _octaves = fit_to_flute(line, opts.octave, grid.beat_ticks)
+    line = add_breath_marks(line, grid.beats_per_bar, grid.beat_ticks)
 
     rh: list[QNote] = []
     lh: list[QNote] = []
     if opts.mode == "duet":
-        pool, bass = _accompaniment_pool(an, used, melody)
         rh, lh = accompany(pool, line, grid, opts.piano_style, shift=shift, bass=bass)
         if not rh and not lh:
             warnings.append("No chords could be found for a piano part, so this is the flute alone.")
 
     arr = Arrangement(flute=line, rh=rh, lh=lh, beats_per_bar=grid.beats_per_bar,
                       bpm=round(grid.bpm()), key_fifths=fifths, key_mode=mode,
-                      shift=shift, warnings=warnings)
+                      shift=shift, warnings=warnings, beat_ticks=grid.beat_ticks)
     arr.warnings += check_arrangement(arr, opts.simple)
     return arr
 

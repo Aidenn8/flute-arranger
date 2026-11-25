@@ -32,7 +32,7 @@ from flask import (Flask, abort, redirect, render_template, request,
                    send_from_directory, url_for)
 
 from .. import config
-from ..model import ArrangeOptions
+from ..model import DOTTED_BEAT, EIGHTH_BEAT, ArrangeOptions
 
 UPLOAD_TYPES = ("mp3", "wav", "m4a", "aac", "flac", "ogg", "oga", "opus", "webm", "aiff", "aif",
                 "mid", "midi")
@@ -269,6 +269,16 @@ def key_name(fifths: int, mode: str) -> str:
     if mode == "minor":
         return f"{_MINOR[i]} minor"
     return f"{_MAJOR[i]} major"
+
+
+_BEAT_NAMES = {DOTTED_BEAT: "dotted quarters", EIGHTH_BEAT: "eighths"}
+
+
+def tempo_text(bpm: float, beat_ticks: int) -> str:
+    """"92", or "60 (counting dotted quarters)" when the beat isn't a quarter."""
+    n = round(bpm)
+    name = _BEAT_NAMES.get(beat_ticks)
+    return f"{n} (counting {name})" if name else str(n)
 
 
 def _query(opts: ArrangeOptions) -> dict:
@@ -513,8 +523,9 @@ def song(song_id: str):
     arr = result.get("arr")
     facts = None
     if arr is not None:
+        num, den = arr.time_signature
         facts = {"key": key_name(arr.key_fifths, arr.key_mode),
-                 "time": f"{arr.beats_per_bar}/4", "tempo": round(arr.bpm)}
+                 "time": f"{num}/{den}", "tempo": tempo_text(arr.bpm, arr.beat_ticks)}
     ext = _ext(meta.get("filename", ""))
     original_url = None
     if ext not in MIDI_TYPES:

@@ -14,7 +14,7 @@ from pathlib import Path
 
 from . import pipeline
 from .config import OUT_DIR
-from .model import ArrangeOptions
+from .model import METERS, ArrangeOptions, normalize_meter
 
 
 def new_song(src: Path, kind: str, mode: str, out_dir: Path = OUT_DIR) -> Path:
@@ -36,7 +36,16 @@ def _set_meta(song_dir: Path, **kw) -> None:
     p.write_text(json.dumps(meta))
 
 
-def main(argv: list[str] | None = None) -> None:
+def meter_arg(text: str) -> str:
+    """--meter: auto, 2/4, 3/4, 4/4, 3/8, 6/8, 9/8 or 12/8 (0, 3, 4 = the old auto, 3/4, 4/4)."""
+    m = normalize_meter(text)
+    if m == "auto" and text.strip() not in ("auto", "0"):
+        raise argparse.ArgumentTypeError(
+            f"unknown time {text!r}: use auto, {', '.join(METERS)}")
+    return m
+
+
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Turn a song into flute sheet music.")
     ap.add_argument("file", type=Path, nargs="?")
     ap.add_argument("--kind", default="auto", choices=["auto", "piano", "song", "band"])
@@ -46,12 +55,18 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--simple", action="store_true")
     ap.add_argument("--easy-key", action="store_true")
     ap.add_argument("--piano-style", default="chords", choices=["chords", "cleaned"])
-    ap.add_argument("--meter", type=int, default=0, choices=[0, 3, 4], help="beats per bar (0 = as heard)")
+    ap.add_argument("--meter", type=meter_arg, default="auto",
+                    help="time signature: auto (as heard), " + ", ".join(METERS))
     ap.add_argument("--barshift", type=int, default=0, choices=[0, 1, 2, 3],
                     help="move the bar lines this many beats later")
     ap.add_argument("--tempo", type=int, default=0, choices=[-1, 0, 1],
                     help="-1 = half as fast, 1 = twice as fast")
     ap.add_argument("--song-dir", type=Path, help="re-use an existing song folder")
+    return ap
+
+
+def main(argv: list[str] | None = None) -> None:
+    ap = build_parser()
     a = ap.parse_args(argv)
     if not a.song_dir and not a.file:
         ap.error("give a file or --song-dir")
@@ -76,7 +91,7 @@ def main(argv: list[str] | None = None) -> None:
     arr = res["arr"]
     print(f"[{time.time() - t0:6.1f}s] done: kind={an.kind} flute notes={len(arr.flute)} "
           f"piano notes={len(arr.rh) + len(arr.lh)} key fifths={arr.key_fifths} {arr.key_mode} "
-          f"{arr.beats_per_bar}/4 tempo {arr.bpm}")
+          f"{arr.time_signature[0]}/{arr.time_signature[1]} tempo {arr.bpm}")
     for w in res["warnings"]:
         print("  warning:", w)
     print("  folder:", song_dir)

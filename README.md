@@ -26,7 +26,8 @@ Command line, if you'd rather:
 
 ```sh
 .venv/bin/python -m sheetswap.cli song.mp3 --mode duet          # flute + piano
-.venv/bin/python -m sheetswap.cli song.mp3 --meter 3 --simple    # 3/4, easier rhythms
+.venv/bin/python -m sheetswap.cli song.mp3 --meter 3/4 --simple  # 3/4, easier rhythms
+.venv/bin/python -m sheetswap.cli song.mp3 --meter 6/8           # also 2/4, 4/4, 3/8, 9/8, 12/8
 ```
 
 ## The options on a song's page
@@ -97,7 +98,7 @@ On macOS 14 the models run on the CPU (the Apple GPU path crashes there), so a 4
 
 1. **Separate** the song into singing, drums, bass and the rest (Demucs), unless it's solo piano.
 2. **Write down the notes**: a piano model (ByteDance's piano transcription) and a general model for any instrument (Spotify's Basic Pitch). Notes only the general model hears belong to some other instrument, which tells "solo piano" apart from "piano + violin".
-3. **Find the beat and the meter** from the drums, or from the transcribed notes.
+3. **Find the beat and the meter** from the drums, or from the transcribed notes. Where the notes fall inside each beat tells 6/8-type music (beats split in three, written 9/8 or 12/8) from 2/4-3/4-4/4, and fast three-beat bars split in two become 3/8.
 4. **Pick the tune**: the singing if there is any; the notes a pianist plays louder; otherwise the highest sensible line through the notes.
 5. **Fit it to the flute**: one octave move for the whole piece, then whole phrases moved where needed, never single notes.
 6. **Clean the rhythm**: snap to plain 8ths where the playing allows, hold notes through short gaps, add breath marks in long phrases.
