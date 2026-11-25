@@ -5,3 +5,4 @@ models/
 out/
 samples/
 .claude/
+tools/bin/
