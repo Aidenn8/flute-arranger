@@ -318,3 +318,26 @@ def test_meter_six_eight_on_a_four_four_file(tmp_path):
     six = pipeline.arrange(an, ArrangeOptions(meter="6/8"))
     assert six.time_signature == (6, 8)
     assert [q.dur for q in six.flute][:4] == [18] * 4                # each beat a dotted quarter
+
+
+def test_find_beats_falls_back_when_the_network_fails(tmp_path, monkeypatch):
+    import numpy as np
+    import soundfile as sf
+    from sheetswap import neural_beats
+    sr = 22050
+    y = np.zeros(sr * 6)
+    for i in range(12):
+        y[int(i * 0.5 * sr):int(i * 0.5 * sr) + 200] = 0.8
+    sf.write(tmp_path / "a.wav", y, sr)
+    def broken(*a, **k):
+        raise RuntimeError("no model")
+    monkeypatch.setattr(neural_beats, "track_beats_neural", broken)
+    g = pipeline.find_beats(tmp_path / "a.wav", {}, "piano", {"piano": []})
+    assert g.tracker == "librosa" and 100 < g.bpm() < 140
+
+
+def test_grid_tracker_survives_save_and_load(tmp_path):
+    an = _analysis({"piano": [Note(60, 0.0, 0.5)]})
+    an.grid = BeatGrid([0.0, 0.5, 1.0, 1.5], 4, 0, tracker="neural")
+    an.save(tmp_path / "a.json")
+    assert Analysis.load(tmp_path / "a.json").grid.tracker == "neural"

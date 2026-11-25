@@ -92,6 +92,7 @@ class BeatGrid:
     beats_per_bar: int = 4
     first_downbeat: int = 0
     beat_ticks: int = QUARTER_BEAT      # 12 quarter, 18 dotted quarter, 6 eighth
+    tracker: str = "librosa"            # what found the beats: "neural" (Beat This!), "librosa", "midi"
 
     @property
     def bar_ticks(self) -> int:

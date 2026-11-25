@@ -90,7 +90,6 @@ def _analyze_midi(src: Path, song_id: str) -> Analysis:
 
 def _analyze_audio(src: Path, song_dir: Path, kind: str, progress: ProgressFn) -> Analysis:
     from . import audio, separate, transcribe
-    from .beats import track_beats
 
     total = 5
     progress(1, total, "Reading the file")
@@ -130,9 +129,7 @@ def _analyze_audio(src: Path, song_dir: Path, kind: str, progress: ProgressFn) -
         sources["bass"] = transcribe.general(stems["bass"])
 
     progress(4, total, "Finding the beat")
-    drums = stems.get("drums") if kind in ("song", "band") else None
-    beat_notes = sources.get("piano") or (sources.get("other", []) + sources.get("bass", []))
-    grid = track_beats(mono, drums, beat_notes)
+    grid = find_beats(mono, stems, kind, sources)
 
     progress(5, total, "Saving")
     return Analysis(song_id=song_dir.name, kind=kind, duration=duration, grid=grid, sources=sources)
@@ -161,6 +158,32 @@ def other_instrument_cover(general: list[Note], piano: list[Note], duration: flo
     from .melody import top_voice
     line = top_voice(unheard_notes(general, piano))
     return sum(n.end - n.start for n in line) / max(duration, 1.0)
+
+
+def find_beats(mono: Path, stems: dict, kind: str, sources: dict) -> BeatGrid:
+    """Beats and bars: the Beat This! network, or the older librosa tracker if it fails."""
+    import logging
+    from .beats import track_beats
+    try:
+        from .neural_beats import track_beats_neural
+        return track_beats_neural(mono)
+    except Exception as e:                       # no model download, a torch problem, ...
+        logging.getLogger(__name__).warning("neural beat tracking failed (%s); using librosa", e)
+    drums = stems.get("drums") if kind in ("song", "band") else None
+    beat_notes = sources.get("piano") or (sources.get("other", []) + sources.get("bass", []))
+    return track_beats(mono, drums, beat_notes)
+
+
+def regrid(song_dir: Path) -> Analysis:
+    """Find the beats again for a song analysed before (only the audio is needed)."""
+    song_dir = Path(song_dir)
+    an = Analysis.load(song_dir / "analysis.json")
+    stems = {p.stem: p for p in (song_dir / "stems").glob("*.wav")}
+    an.grid = find_beats(song_dir / "audio.wav", stems, an.kind, an.sources)
+    tmp = song_dir / "analysis.json.tmp"
+    an.save(tmp)
+    os.replace(tmp, song_dir / "analysis.json")
+    return an
 
 
 # ---------------------------------------------------------------- arrange

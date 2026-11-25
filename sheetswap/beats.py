@@ -27,6 +27,7 @@ THREE_MARGIN = 1.1        # 3/4 must beat 4/4 by 10% (ties go to 4/4)
 SILENCE = 0.01            # RMS below 1% of the peak (-40 dB) counts as silence
 DRUMS_MIN = 0.1           # drums stem quieter than this share of the mix RMS is ignored
 DOWNBEAT_MARGIN = 1.1     # the tune's long notes must favour one beat of the bar by 10%
+NEURAL_DOWNBEAT_MARGIN = 1.5  # ... by 50% to overrule the Beat This! bar lines, which are usually right
 SPARSE_BASS = 0.6         # a bass hitting fewer than this share of beats helps find beat 1
 NOTE_BLEND = 0.7          # weight of the notes' onset curve vs the audio's, for beat tracking
 BASS_WEIGHT = 1.5         # extra weight of low notes in the curve used to find the downbeats
@@ -147,7 +148,8 @@ def melody_downbeat(melody, grid: BeatGrid, music_start: float, bass=None) -> Be
     means = [float(weight[idx % bpb == p].mean()) for p in range(bpb)]
     best = int(np.argmax(means))
     runner_up = max(m for p, m in enumerate(means) if p != best)
-    if means[best] <= 0 or means[best] < DOWNBEAT_MARGIN * runner_up:
+    margin = NEURAL_DOWNBEAT_MARGIN if grid.tracker == "neural" else DOWNBEAT_MARGIN
+    if means[best] <= 0 or means[best] < margin * runner_up:
         return grid                     # no clear evidence: keep the beat tracker's choice
     first = next((i for i in range(len(b)) if i % bpb == best and b[i] >= music_start - 0.25 * period),
                  best)
@@ -289,7 +291,7 @@ def grid_from_midi(pm) -> BeatGrid:
         later = downs[downs >= min(starts) - tol]
         if len(later):
             first = int(np.argmin(np.abs(beats - later[0])))
-    return BeatGrid([float(b) for b in beats], bpb, first, unit)
+    return BeatGrid([float(b) for b in beats], bpb, first, unit, tracker="midi")
 
 
 # --- helpers ---------------------------------------------------------------
