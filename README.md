@@ -42,6 +42,7 @@ Command line, if you'd rather:
 | **Bar lines** | move the bar lines 1–3 beats later if the strong beats don't land at the start of each bar |
 | **Make it easier to play** | no notes faster than 8ths |
 | **Move to an easier key** | at most 2 sharps or flats |
+| **Expression** | *expressive* (the default) writes in how the recording is played: dynamics (p, mf, f) and swells, slurs, staccatos and accents, rit. and fermatas, and a tempo word like "Andante dolce"; the preview plays them. *with ornaments* adds a few trills, turns and grace notes (at most one every 4 bars, only on long notes); *plain* is just the notes |
 | **Piano part** | simple chords, or follow the original piano more closely |
 
 Each page has the score, a preview you can listen to (flute + piano), the original recording, a print / save-as-PDF link, and MusicXML (opens in MuseScore if you want to edit) and MIDI downloads.

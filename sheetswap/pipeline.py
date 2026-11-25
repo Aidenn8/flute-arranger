@@ -15,6 +15,7 @@ from .model import (DOTTED_BEAT, EIGHTH_BEAT, METERS, Analysis, ArrangeOptions, 
 ProgressFn = Callable[[int, int, str], None]
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus", ".webm", ".aiff", ".aif"}
 MIDI_EXTS = {".mid", ".midi"}
+SCORE_EXTS = {".musicxml", ".xml", ".mxl"}     # sheet music (MusicXML), read by score_input
 
 
 def _noop(step: int, total: int, msg: str) -> None:
@@ -23,7 +24,7 @@ def _noop(step: int, total: int, msg: str) -> None:
 
 def find_input(song_dir: Path) -> Path:
     for p in sorted(Path(song_dir).glob("input.*")):
-        if p.suffix.lower() in AUDIO_EXTS | MIDI_EXTS:
+        if p.suffix.lower() in AUDIO_EXTS | MIDI_EXTS | SCORE_EXTS:
             return p
     raise FileNotFoundError("no input file in " + str(song_dir))
 
@@ -46,19 +47,52 @@ def analyze(song_dir: Path, kind: str = "auto", progress: ProgressFn = _noop) ->
     cached = song_dir / "analysis.json"
     if cached.exists():
         try:
-            return Analysis.load(cached)
+            return load_analysis(song_dir)
         except (OSError, ValueError, KeyError, TypeError):
             pass                                  # unreadable cache: analyze again
     src = find_input(song_dir)
-    if src.suffix.lower() in MIDI_EXTS:
-        progress(1, 2, "Reading the MIDI file")
+    an = _analyze_score(src, song_dir, progress)  # sheet music, or a MIDI file written as a score
+    if an is None and src.suffix.lower() in MIDI_EXTS:
         an = _analyze_midi(src, song_dir.name)
-    else:
+    elif an is None:
         an = _analyze_audio(src, song_dir, kind, progress)
-    an.title = _title(song_dir)
+    an.title = an.title or _title(song_dir)
     tmp = song_dir / "analysis.json.tmp"
     an.save(tmp)
     os.replace(tmp, cached)
+    return an
+
+
+def _analyze_score(src: Path, song_dir: Path, progress: ProgressFn) -> Analysis | None:
+    """Sheet music (MusicXML), or a MIDI file written in a notation program:
+    the score's exact notes, kept in score.json (score_input.ScoreSource), so
+    arranging never quantizes or parses again. None for other inputs, and for
+    MIDI files that were played in (those go to the quantizer)."""
+    from . import score_input
+    ext = src.suffix.lower()
+    if ext in SCORE_EXTS:
+        progress(1, 2, "Reading the sheet music")
+        source = score_input.load_score(src)
+    elif ext in MIDI_EXTS:
+        progress(1, 2, "Reading the MIDI file")
+        source = score_input.load_notated_midi(src)
+        if source is None:
+            return None
+    else:
+        return None
+    source.save(song_dir / "score.json")
+    an = score_input.analysis_for(source, song_dir.name)
+    an.score = source
+    return an
+
+
+def load_analysis(song_dir: Path) -> Analysis:
+    """analysis.json, with the parsed sheet music (score.json) as `.score` for kind "score"."""
+    from .score_input import ScoreSource
+    song_dir = Path(song_dir)
+    an = Analysis.load(song_dir / "analysis.json")
+    if an.kind == "score":
+        an.score = ScoreSource.load(song_dir / "score.json")
     return an
 
 
@@ -333,7 +367,22 @@ def bar_grid(an: Analysis, opts: ArrangeOptions, melody: list[Note],
     return grid
 
 
+def _arrange_score(an: Analysis, opts: ArrangeOptions) -> Arrangement:
+    """Sheet music: the chosen part's exact notes (score_input.arrange_score), then
+    the same expression step as for audio, which keeps the score's own marks."""
+    from .score_input import arrange_score
+    from .expression import add_expression
+    source = getattr(an, "score", None)
+    if source is None:
+        raise ValueError("The sheet music for this song is missing. Please upload it again.")
+    arr, melody, grid = arrange_score(source, opts)
+    arr.expression = add_expression(arr, melody, grid, opts.expression)
+    return arr
+
+
 def arrange(an: Analysis, opts: ArrangeOptions) -> Arrangement:
+    if an.kind == "score":
+        return _arrange_score(an, opts)
     from .rhythm import quantize_line, add_breath_marks
     from .flute import fit_to_flute, easy_key_shift, key_after_shift
     from .harmony import detect_key
@@ -370,6 +419,8 @@ def arrange(an: Analysis, opts: ArrangeOptions) -> Arrangement:
                       bpm=round(grid.bpm()), key_fifths=fifths, key_mode=mode,
                       shift=shift, warnings=warnings, beat_ticks=grid.beat_ticks)
     arr.warnings += check_arrangement(arr, opts.simple)
+    from .expression import add_expression
+    arr.expression = add_expression(arr, melody, grid, opts.expression)
     return arr
 
 
@@ -407,7 +458,7 @@ def arrange_and_render(song_dir: Path, opts: ArrangeOptions) -> dict:
     info_path = out / "info.json"
     info = _read_json(info_path)
     if info is None:
-        an = Analysis.load(song_dir / "analysis.json")
+        an = load_analysis(song_dir)
         arr = arrange(an, opts)
         out.mkdir(parents=True, exist_ok=True)
         title = an.title or _title(song_dir) or "Untitled"

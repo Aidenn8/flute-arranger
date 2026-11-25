@@ -12,6 +12,7 @@ The beat itself is a quarter (12 ticks: 2/4, 3/4, 4/4), a dotted quarter
 from __future__ import annotations
 
 import json
+import re
 from bisect import bisect_right
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -59,6 +60,20 @@ def normalize_meter(value) -> str:
     if isinstance(value, int) and not isinstance(value, bool):
         return _OLD_METERS.get(value, "auto")
     return "auto"
+
+
+def normalize_part(value) -> str:
+    """A part choice for sheet music: "auto", a part number ("0", "1", ...) or a
+    part's name, trimmed to 60 characters; empty or unusable -> "auto"."""
+    if isinstance(value, bool) or value is None:
+        return "auto"
+    v = " ".join(str(value).split())[:60]
+    return v if v and v.lower() != "auto" else "auto"
+
+
+def _slug(text: str) -> str:
+    """Text safe for a folder name (part choices go into ArrangeOptions.key())."""
+    return re.sub(r"[^0-9A-Za-z]+", "_", text).strip("_")[:40] or "x"
 
 
 @dataclass
@@ -181,6 +196,7 @@ _CHOICES = {
     "mode": ("solo", "duet"),
     "melody_source": ("auto", "vocals", "piano", "other"),
     "piano_style": ("chords", "cleaned"),
+    "expression": ("plain", "expressive", "ornaments"),
 }
 
 
@@ -195,16 +211,20 @@ class ArrangeOptions:
     meter: str = "auto"           # "auto" (as heard) or a key of METERS, e.g. "6/8"
     barshift: int = 0             # move the bar lines this many beats later (0-3)
     tempo: int = 0                # -1 = half as fast (beats twice as long), +1 = twice as fast
+    expression: str = "expressive"  # "plain" (notes only), "expressive" (dynamics, slurs, ...), "ornaments"
+    part: str = "auto"           # sheet music: which part/staff is the tune ("auto", an index or a name)
 
     def __post_init__(self) -> None:
         self.meter = normalize_meter(self.meter)
+        self.part = normalize_part(self.part)
 
     def key(self) -> str:
         return (f"{self.mode}-{self.melody_source}-o{self.octave:+d}-"
                 f"{'simple' if self.simple else 'full'}-"
                 f"{'easy' if self.easy_key else 'orig'}-{self.piano_style}"
                 f"-m{self.meter.replace('/', '-')}"
-                f"-b{self.barshift}-t{self.tempo:+d}")
+                f"-b{self.barshift}-t{self.tempo:+d}-x{self.expression}"
+                + (f"-p{_slug(self.part)}" if self.part != "auto" else ""))
 
     @classmethod
     def from_form(cls, d: Mapping) -> "ArrangeOptions":
@@ -230,6 +250,7 @@ class ArrangeOptions:
         truthy = ("1", "on", "true", "yes", True)
         opts.simple = d.get("simple") in truthy
         opts.easy_key = d.get("easy_key") in truthy
+        opts.part = normalize_part(d.get("part", "auto"))
         return opts
 
 

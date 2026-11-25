@@ -17,20 +17,23 @@ in threes.
 """
 from __future__ import annotations
 
+import re
 from bisect import bisect_left
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 from functools import lru_cache
 from pathlib import Path
 
+import numpy as np
 import pretty_midi
-from music21 import (articulations, chord, clef, duration, instrument, key, layout,
-                     metadata, meter, note, pitch, spanner, stream, tempo, tie)
+from music21 import (articulations, chord, clef, duration, dynamics, expressions, instrument,
+                     key, layout, metadata, meter, note, pitch, spanner, stream, tempo, tie)
 from music21 import bar as m21bar
 
 from .checks import bar_ticks, lead_in_ticks
 from .config import FLUTE_PROGRAM, PIANO_PROGRAM, TICKS_PER_BEAT as T
-from .model import DOTTED_BEAT, QUARTER_BEAT, Arrangement, QNote
+from .expression import lower_neighbour, upper_neighbour
+from .model import DOTTED_BEAT, QUARTER_BEAT, Arrangement, Mark, QNote
 
 D = DOTTED_BEAT       # the beat the page shows in 6/8, 9/8, 12/8 and 3/8 (18 ticks)
 
@@ -390,7 +393,8 @@ def _ql(ticks: int) -> Fraction:
 
 
 def _fill_measures(part: stream.Stream, events: list[_Event], n_bars: int, arr: Arrangement,
-                   staff_clef, top: bool, compress_rests: bool = False) -> None:
+                   staff_clef, top: bool, compress_rests: bool = False,
+                   marks: "_Marks | None" = None) -> None:
     mtr = _meter_of(arr)
     bar = mtr.bar
     trip_beats = set() if mtr.compound else {
@@ -409,10 +413,12 @@ def _fill_measures(part: stream.Stream, events: list[_Event], n_bars: int, arr: 
             put(s, r)
 
     cursor = 0
+    placed: list[list] = []          # per event: its notated pieces
     for e in events:
         if e.start > cursor:
             rests(cursor, e.start)
         pieces = _pieces(e.start, e.end, mtr, False, trip_beats)
+        placed.append([])
         for i, (s, d, _) in enumerate(pieces):
             if len(e.pitches) == 1:
                 el = note.Note(spell(e.pitches[0], arr.key_fifths, arr.key_mode, e.direction))
@@ -426,6 +432,7 @@ def _fill_measures(part: stream.Stream, events: list[_Event], n_bars: int, arr: 
             if e.breath and i == len(pieces) - 1:
                 el.articulations.append(articulations.BreathMark())
             put(s, el)
+            placed[-1].append(el)
         cursor = e.end
     if cursor < n_bars * bar:
         rests(cursor, n_bars * bar)
@@ -441,6 +448,8 @@ def _fill_measures(part: stream.Stream, events: list[_Event], n_bars: int, arr: 
     measures[-1].rightBarline = m21bar.Barline("final")
     for m in measures:
         part.append(m)
+    if marks is not None:
+        _attach_marks(part, measures, events, placed, marks, arr)
     part.makeNotation(inPlace=True)
     _number_only_when_beamed(part)
     if compress_rests:
@@ -488,6 +497,7 @@ class _Layout:
     lh: list[_Event]
     n_bars: int
     shift: int
+    marks: "_Marks"
 
 
 def _layout(arr: Arrangement) -> _Layout:
@@ -498,7 +508,162 @@ def _layout(arr: Arrangement) -> _Layout:
     lh = _tidy(_chord_events(arr.lh, shift, arr.flute), compound)
     last = max((e.end for e in (*flute, *rh, *lh)), default=0)
     bar = bar_ticks(arr)
-    return _Layout(flute, rh, lh, max(1, -(-last // bar)), shift)
+    return _Layout(flute, rh, lh, max(1, -(-last // bar)), shift,
+                   _place_marks(arr.expression, flute, shift, bar))
+
+
+# ---------------------------------------------------------------- expression marks
+#
+# Marks (model.Mark, ticks on the flute part) are attached to the laid-out
+# flute events. On the page they sit where a wind part has them: dynamics and
+# hairpins below the staff, tempo changes (rit., a tempo) above in italics,
+# character words (dolce, ...) below in italics, the opening tempo word in bold
+# beside the metronome mark, fermatas and ornaments above, articulations on
+# the notehead side, grace notes as slashed 8ths. Verovio stacks dynamics and
+# hairpins on one line and keeps them clear of each other.
+
+DYNAMIC_LEVELS = ("pp", "p", "mp", "mf", "f", "ff")
+_SINGLE = ("staccato", "tenuto", "accent", "fermata", "trill", "mordent", "turn")
+_TEMPO_WORDS = {"Grave", "Largo", "Lento", "Larghetto", "Adagio", "Adagietto", "Andante",
+                "Andantino", "Moderato", "Allegretto", "Allegro", "Vivace", "Presto",
+                "Prestissimo", "Tempo", "Maestoso"}
+_ABOVE = ("rit", "rall", "a tempo", "accel", "allarg", "string", "meno mosso",
+          "più mosso", "piu mosso", "tempo")
+_RESETS = ("a tempo", "tempo")
+
+
+@dataclass
+class _Marks:
+    """The flute part's marks, by laid-out event (index) or layout tick."""
+    on: dict[int, set[str]] = field(default_factory=dict)       # event -> single-note marks
+    grace: dict[int, int] = field(default_factory=dict)          # event -> grace pitch
+    slurs: list[tuple[int, int]] = field(default_factory=list)   # first, last event
+    wedges: list[tuple[int, int, str]] = field(default_factory=list)   # first, last event, kind
+    wedge_ticks: list[tuple[int, int, str]] = field(default_factory=list)
+    dynamics: list[tuple[int, str, int | None]] = field(default_factory=list)  # tick, level, event
+    texts: list[tuple[int, str]] = field(default_factory=list)   # tick, words
+    heading: str = ""                                            # tempo word(s) at the start
+    rits: list[tuple[int, int]] = field(default_factory=list)    # start, end tick
+    a_tempo: list[int] = field(default_factory=list)             # ticks
+
+    def __bool__(self) -> bool:
+        return bool(self.on or self.grace or self.slurs or self.wedges or self.dynamics
+                    or self.texts or self.heading or self.rits)
+
+
+def _nearest(starts: list[int], tick: int, tol: int = 3) -> int | None:
+    """Index of the event starting at tick, or within tol ticks of it (tidying moves onsets)."""
+    i = bisect_left(starts, tick)
+    near = [j for j in (i - 1, i) if 0 <= j < len(starts) and abs(starts[j] - tick) <= tol]
+    return min(near, key=lambda j: abs(starts[j] - tick)) if near else None
+
+
+def _at_or_before(starts: list[int], tick: int) -> int | None:
+    j = _nearest(starts, tick)
+    if j is None:
+        j = bisect_left(starts, tick + 1) - 1
+    return j if j >= 0 else None
+
+
+def _place_marks(marks: list[Mark], events: list[_Event], shift: int, bar: int) -> _Marks:
+    out = _Marks()
+    if not marks or not events:
+        return out
+    starts = [e.start for e in events]
+    for m in sorted(marks, key=lambda m: (m.start, m.kind)):
+        s = m.start + shift
+        e = (m.end if m.end > m.start else m.start) + shift
+        i = _nearest(starts, s)
+        if m.kind == "dynamic" and m.value in DYNAMIC_LEVELS:
+            out.dynamics.append((starts[i] if i is not None else s, m.value, i))
+        elif m.kind in ("cresc", "dim") and e > s:
+            out.wedge_ticks.append((s, e, m.kind))
+            j = _at_or_before(starts, e)
+            if i is not None and j is not None and j >= i:
+                out.wedges.append((i, j, m.kind))
+        elif m.kind == "slur":
+            j = _nearest(starts, e)
+            if i is not None and j is not None and j > i:
+                out.slurs.append((i, j))
+        elif m.kind in _SINGLE and i is not None:
+            out.on.setdefault(i, set()).add(m.kind)
+        elif m.kind == "grace" and i is not None and m.value.strip().isdigit():
+            out.grace[i] = int(m.value)
+        elif m.kind == "text" and m.value.strip():
+            words = " ".join(m.value.split())
+            low = words.lower()
+            if not out.heading and s <= starts[0] and words.split()[0] in _TEMPO_WORDS:
+                out.heading = words
+                continue
+            out.texts.append((starts[i] if i is not None else s, words))
+            if low.startswith(("rit", "rall")):
+                out.rits.append((s, e if e > s else s + 2 * bar))
+            elif low.startswith(_RESETS) or words.split()[0] in _TEMPO_WORDS:
+                out.a_tempo.append(s)
+    return out
+
+
+def _attach_marks(part: stream.Stream, measures: list, events: list[_Event], placed: list[list],
+                  marks: _Marks, arr: Arrangement) -> None:
+    """Put the marks on the music21 notes (before makeNotation, so grace notes get
+    their accidentals): first piece of a tied note for attacks, last for fermatas."""
+    bar = _meter_of(arr).bar
+
+    def put(tick: int, el) -> None:
+        k = min(max(tick, 0) // bar, len(measures) - 1)
+        measures[k].insert(_ql(max(tick, 0) - k * bar), el)
+
+    with_dynamic = set()
+    for tick, level, i in marks.dynamics:
+        d = dynamics.Dynamic(level)
+        d.placement = "below"
+        put(tick, d)
+        if i is not None:
+            with_dynamic.add(i)
+    for i, j, kind in marks.wedges:
+        if j > i and j in with_dynamic:          # "< f": the wedge stops before the new dynamic
+            j -= 1
+        w = (dynamics.Crescendo if kind == "cresc" else dynamics.Diminuendo)(
+            placed[i][0], placed[j][-1])
+        w.placement = "below"
+        part.insert(0, w)
+    for i, j in marks.slurs:
+        sl = spanner.Slur(placed[i][0], placed[j][-1])
+        if any(p < 71 for e in events[i:j + 1] for p in e.pitches):
+            sl.placement = "above"      # over stems-up notes, clear of the dynamics below
+        part.insert(0, sl)
+    for i, kinds in marks.on.items():
+        first, last = placed[i][0], placed[i][-1]
+        for kind, cls in (("accent", articulations.Accent), ("tenuto", articulations.Tenuto),
+                          ("staccato", articulations.Staccato)):
+            if kind in kinds:
+                first.articulations.append(cls())
+        if "fermata" in kinds:
+            f = expressions.Fermata()
+            f.type = "upright"                  # above the staff, whichever way the stem goes
+            last.expressions.append(f)
+        for kind, cls in (("trill", expressions.Trill), ("mordent", expressions.InvertedMordent),
+                          ("turn", expressions.Turn)):
+            if kind in kinds:
+                orn = cls()
+                orn.placement = "above"
+                first.expressions.append(orn)
+    for i, gp in marks.grace.items():
+        g = note.Note(spell(gp, arr.key_fifths, arr.key_mode), type="eighth")
+        put(events[i].start, g.getGrace(appoggiatura=False))     # slashed: an acciaccatura
+    for tick, words in marks.texts:
+        te = expressions.TextExpression(words)
+        low = words.lower()
+        if words.split()[0] in _TEMPO_WORDS and not low.startswith("tempo"):
+            te.placement = "above"
+            te.style.fontWeight = "bold"
+        else:
+            te.placement = "above" if low.startswith(_ABOVE) else "below"
+            te.style.fontStyle = "italic"
+        put(tick, te)
+    if marks.heading:
+        for mm in measures[0].getElementsByClass(tempo.MetronomeMark):
+            mm.text = marks.heading
 
 
 def _is_duet(arr: Arrangement) -> bool:
@@ -523,7 +688,7 @@ def _build(arr: Arrangement, title: str, lay: _Layout) -> stream.Score:
     flute.partName, flute.partAbbreviation = "Flute", "Fl."
     flute.insert(0, instrument.Flute())
     _fill_measures(flute, lay.flute, lay.n_bars, arr, clef.TrebleClef(), top=True,
-                   compress_rests=not _is_duet(arr))
+                   compress_rests=not _is_duet(arr), marks=lay.marks)
     score.insert(0, flute)
 
     if _is_duet(arr):
@@ -555,26 +720,211 @@ def _key_number(fifths: int, mode: str) -> int:
 
 
 def _write_midi(arr: Arrangement, lay: _Layout, path: Path) -> None:
+    """The parts as MIDI, playing the marks (see _Performance); with no marks
+    it plays the notes as written at the printed tempo."""
     bpm = _bpm(arr)                               # beats of arr.beat_ticks per minute
-    sec = 60.0 / bpm / arr.beat_ticks
-    pm = pretty_midi.PrettyMIDI(initial_tempo=bpm * arr.beat_ticks / T)   # quarters per minute
+    perf = _Performance(arr, lay)
+    pm = pretty_midi.PrettyMIDI(resolution=MIDI_RESOLUTION,
+                                initial_tempo=bpm * arr.beat_ticks / T)   # quarters per minute
+    perf.tempo_map(pm)
     pm.time_signature_changes.append(pretty_midi.TimeSignature(*arr.time_signature, 0.0))
     pm.key_signature_changes.append(
         pretty_midi.KeySignature(_key_number(max(-7, min(7, arr.key_fifths)), arr.key_mode), 0.0))
-    parts = [("Flute", FLUTE_PROGRAM, lay.flute)]
+    flute = pretty_midi.Instrument(program=FLUTE_PROGRAM, name="Flute")
+    flute.notes = perf.flute_notes(_balanced_velocity(lay.flute, MIX_VELOCITY[FLUTE_PROGRAM]))
+    flute.control_changes = perf.expression_cc()
+    pm.instruments.append(flute)
     if _is_duet(arr):
-        parts.append(("Piano", PIANO_PROGRAM, lay.rh + lay.lh))
-    for name, program, events in parts:
-        inst = pretty_midi.Instrument(program=program, name=name)
-        level = _balanced_velocity(events, MIX_VELOCITY[program])
+        piano = pretty_midi.Instrument(program=PIANO_PROGRAM, name="Piano")
+        events = lay.rh + lay.lh
+        level = _balanced_velocity(events, MIX_VELOCITY[PIANO_PROGRAM])
         for e in events:
-            start, end = e.start * sec, e.end * sec
-            if e.breath:                        # leave a little air before the next note
-                end -= min(0.1, 0.25 * (end - start))
+            start, end = perf.at(e.start), perf.at(e.end)
+            v = perf.follow(level(e.velocity), e.start)
             for p in e.pitches:
-                inst.notes.append(pretty_midi.Note(level(e.velocity), p, start, end))
-        pm.instruments.append(inst)
+                piano.notes.append(pretty_midi.Note(v, p, start, end))
+        piano.control_changes = perf.expression_cc()
+        pm.instruments.append(piano)
     pm.write(str(path))
+
+
+# Playing the marks. Dynamics: the note-on velocity (DYN_VELOCITY) and CC 11,
+# expression (DYN_CC11), together about 3 dB a level with this soundfont
+# (velocity scales a flute note's amplitude, CC 11 its cube); hairpins ramp
+# both, CC 11 also inside held notes; the piano follows the same dynamics so
+# the balance stays. Accents are louder (ACCENT_PLUS), staccatos sound
+# STACCATO_KEEP of their length, slurred notes run into the next, tenutos are
+# held full, other notes that lead straight into the next are tongued (a gap
+# of DETACH of the note, at most DETACH_MAX s). "rit." slows to RIT_SLOW of
+# the tempo by its end, "a tempo" returns; a fermata holds its note
+# FERMATA_HOLD times as long (at most FERMATA_MAX s more). Trills (from the
+# upper note, with a turn at the end), mordents, turns and grace notes are
+# played out, ORN_STEP s per ornament note.
+MIDI_RESOLUTION = 480                 # MIDI ticks per quarter: 40 per tick of ours
+DYN_VELOCITY = (45, 56, 68, 80, 94, 108)          # pp p mp mf f ff
+DYN_CC11 = (88, 98, 106, 114, 121, 127)
+ACCENT_PLUS, TENUTO_PLUS = 14, 4
+STACCATO_KEEP = 0.45
+DETACH, DETACH_MAX = 0.12, 0.05
+RIT_SLOW = 0.75
+FERMATA_HOLD, FERMATA_MAX = 1.75, 2.0
+ORN_STEP = 0.07
+PIANO_FOLLOW = 0.8                    # of the flute's velocity change, for the piano
+
+
+class _Performance:
+    def __init__(self, arr: Arrangement, lay: _Layout):
+        self.arr, self.lay, self.marks = arr, lay, lay.marks
+        bar = _meter_of(arr).bar
+        self.n = lay.n_bars * bar + bar               # ticks covered by the tempo map
+        self.sec = 60.0 / _bpm(arr) / arr.beat_ticks  # seconds per tick at the printed tempo
+        self.mult = self._tempo_multipliers()
+        self.cum = np.concatenate([[0.0], np.cumsum(self.mult * self.sec)])
+        self.level = self._level_curve()
+
+    # ---- time
+    def _tempo_multipliers(self) -> np.ndarray:
+        n = self.n
+        mult = np.ones(n)
+        resets = sorted(self.marks.a_tempo)
+        for s, e in self.marks.rits:
+            s, e = max(0, min(s, n)), max(0, min(e, n))
+            span = max(e - s, 1)
+            for t in range(s, e):                 # the speed falls a 16th at a time
+                speed = 1 - (1 - RIT_SLOW) * min(1.0, ((t - s) // 3 * 3 + 3) / span)
+                mult[t] = 1 / speed
+            back = next((r for r in resets if r >= e), n)
+            mult[e:max(e, min(back, n))] = 1 / RIT_SLOW
+        for i, kinds in self.marks.on.items():
+            if "fermata" in kinds:
+                ev = self.lay.flute[i]
+                a, b = max(0, ev.start), min(ev.end, n)
+                held = float(np.sum(mult[a:b])) * self.sec
+                mult[a:b] *= min(FERMATA_HOLD, 1 + FERMATA_MAX / max(held, 1e-3))
+        return mult
+
+    def at(self, tick: float) -> float:
+        """Seconds at a (layout) tick."""
+        if tick >= self.n:
+            return float(self.cum[-1] + (tick - self.n) * self.sec * self.mult[-1])
+        return float(np.interp(tick, np.arange(self.n + 1), self.cum))
+
+    def tempo_map(self, pm: pretty_midi.PrettyMIDI) -> None:
+        """Write the tempo changes into pm (pretty_midi has no public way to add them)."""
+        per = MIDI_RESOLUTION // T
+        changes = [0] + [t for t in range(1, self.n) if self.mult[t] != self.mult[t - 1]]
+        if len(changes) == 1:
+            return
+        pm._tick_scales = [(t * per, self.sec * float(self.mult[t]) / per) for t in changes]
+        pm._update_tick_to_time(self.n * per + 1)
+
+    # ---- loudness
+    def _level_curve(self):
+        """Dynamic level over ticks (0 = pp ... 5 = ff): steps at dynamics, ramps over
+        hairpins to the next dynamic (or one level on); None without dynamics."""
+        dyn = sorted((t, DYNAMIC_LEVELS.index(lv)) for t, lv, _ in self.marks.dynamics)
+        if not dyn:
+            return None
+        cur = float(dyn[0][1])
+        xs, ys = [-1e9], [cur]
+
+        def go(t: float, v: float, ramp: bool) -> None:
+            t = max(t, xs[-1])
+            if ramp:
+                xs.append(t)
+                ys.append(v)
+            elif v != ys[-1]:
+                xs.extend([max(t - 1e-3, xs[-1]), t])
+                ys.extend([ys[-1], v])
+
+        items = [(t, 0, lv, 0) for t, lv in dyn] + \
+                [(s, 1, e, 1 if k == "cresc" else -1) for s, e, k in self.marks.wedge_ticks]
+        for t, kind, a, b in sorted(items):
+            if kind == 0:
+                go(t, float(a), False)
+                cur = float(a)
+                continue
+            e, way = a, b
+            nxt = next((lv for u, lv in dyn if t < u <= e + T), None)
+            target = float(nxt) if nxt is not None and (nxt - cur) * way > 0 \
+                else min(5.0, max(0.0, cur + way))
+            go(t, cur, True)
+            go(e, target, True)
+            cur = target
+        return lambda tick: float(np.interp(tick, xs, ys))
+
+    def velocity(self, tick: int) -> int:
+        return int(round(np.interp(self.level(tick), range(6), DYN_VELOCITY)))
+
+    def follow(self, v: int, tick: int) -> int:
+        """A piano velocity moved with the flute's dynamics."""
+        if self.level is None:
+            return v
+        return max(1, min(127, v + round(PIANO_FOLLOW * (self.velocity(tick) - DYN_VELOCITY[3]))))
+
+    def expression_cc(self) -> list[pretty_midi.ControlChange]:
+        if self.level is None:
+            return []
+        ticks = sorted(set(range(0, self.n, 3)) | {t for t, _, _ in self.marks.dynamics if t >= 0})
+        out, last = [], None
+        for t in ticks:
+            v = int(round(np.interp(self.level(t), range(6), DYN_CC11)))
+            if v != last:
+                out.append(pretty_midi.ControlChange(11, v, self.at(t)))
+                last = v
+        return out
+
+    # ---- the flute
+    def flute_notes(self, balanced) -> list[pretty_midi.Note]:
+        marks, events = self.marks, self.lay.flute
+        inner = {k for i, j in marks.slurs for k in range(i, j)}   # slurred into the next note
+        out: list[pretty_midi.Note] = []
+        for i, e in enumerate(events):
+            kinds = marks.on.get(i, set())
+            start, end = self.at(e.start), self.at(e.end)
+            joined = i + 1 < len(events) and events[i + 1].start == e.end
+            if marks:
+                if "staccato" in kinds:
+                    end = start + max(0.06, STACCATO_KEEP * (end - start))
+                elif joined and i not in inner and "tenuto" not in kinds:
+                    end -= min(DETACH_MAX, DETACH * (end - start))
+            if e.breath and "staccato" not in kinds:   # leave a little air before the next note
+                end -= min(0.1, 0.25 * (end - start))
+            v = self.velocity(e.start) if self.level is not None else balanced(e.velocity)
+            v += ACCENT_PLUS if "accent" in kinds else TENUTO_PLUS if "tenuto" in kinds else 0
+            v = max(1, min(127, v))
+            p = e.pitches[0]
+            if i in marks.grace:
+                g = min(ORN_STEP, 0.5 * (start - out[-1].start)) if out else ORN_STEP
+                if out and out[-1].end > start - g:
+                    out[-1].end = max(out[-1].start + 0.02, start - g)
+                out.append(pretty_midi.Note(max(1, v - 10), marks.grace[i], max(0.0, start - g),
+                                            start))
+            orn = next((k for k in ("trill", "mordent", "turn") if k in kinds), None)
+            for q, a, b in _ornament(orn, p, start, end, self.arr.key_fifths):
+                out.append(pretty_midi.Note(v if q == p else max(1, v - 6), q, a, b))
+        return out
+
+
+def _ornament(kind: str | None, p: int, start: float, end: float,
+              fifths: int) -> list[tuple[int, float, float]]:
+    """The notes an ornament on pitch p over [start, end) is played as."""
+    dur = end - start
+    if kind is None or dur <= 0:
+        return [(p, start, end)]
+    up, low = upper_neighbour(p, fifths), lower_neighbour(p, fifths)
+    if kind == "trill":
+        n = max(4, int(dur / ORN_STEP))
+        n -= n % 2
+        d = dur / n
+        seq = [up, p] * (n // 2 - 1) + [low, p]
+        return [(q, start + k * d, start + (k + 1) * d) for k, q in enumerate(seq)]
+    if kind == "mordent":
+        d = min(ORN_STEP, dur / 6)
+        return [(p, start, start + d), (up, start + d, start + 2 * d), (p, start + 2 * d, end)]
+    d = min(1.3 * ORN_STEP, dur / 6)              # a turn: upper, main, lower, main
+    return [(up, start, start + d), (p, start + d, start + 2 * d),
+            (low, start + 2 * d, start + 3 * d), (p, start + 3 * d, end)]
 
 
 # Playback loudness: transcribed velocities say more about the recording than
@@ -599,5 +949,25 @@ def write_outputs(arr: Arrangement, title: str, out_dir: Path) -> dict[str, Path
     xml_path, midi_path = out_dir / "score.musicxml", out_dir / "score.mid"
     lay = _layout(arr)
     _build(arr, title, lay).write("musicxml", fp=str(xml_path))
+    if lay.marks.heading:
+        xml_path.write_text(_join_tempo_heading(xml_path.read_text()))
     _write_midi(arr, lay, midi_path)
     return {"musicxml": xml_path, "midi": midi_path}
+
+
+_TEMPO_SPLIT = re.compile(
+    r"<direction>(\s*<direction-type>\s*<metronome\b.*?</direction-type>)(.*?</direction>)"
+    r"\s*<direction>\s*<direction-type>\s*<words\b[^>]*>(.*?)</words>\s*</direction-type>"
+    r"\s*</direction>", re.S)
+
+
+def _join_tempo_heading(xml: str) -> str:
+    """music21 writes a tempo's words and its metronome mark as two directions,
+    which Verovio draws apart (the words under the staff); as one direction
+    above the staff it reads "Andante espressivo  quarter = 84" as an edition
+    prints it (an en space between: Verovio drops a plain space at the end of
+    a text)."""
+    return _TEMPO_SPLIT.sub(
+        lambda m: ('<direction placement="above"><direction-type>'
+                   f'<words font-weight="bold">{m.group(3)}&#8194;</words></direction-type>'
+                   + m.group(1) + m.group(2)), xml, count=1)

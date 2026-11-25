@@ -37,31 +37,45 @@
 </tr>
 <tr>
   <td valign="top">Which part is the tune?</td>
+  {% if score %}
+  <td>{% for value, label in score.parts %}<label><input type="radio" name="part" value="{{ value }}"{% if opts.part == value %} checked{% endif %}> {{ label }}</label><br>
+  {% endfor %}<small>The flute plays this part's notes exactly as written (a piano part: the top notes of the hand).</small></td>
+  {% else %}
   <td>{{ radios("melody_source", opts.melody_source, [("auto", "let it guess"), ("vocals", "the singing"), ("piano", "the piano's top line"), ("other", "other instruments")]) }}</td>
+  {% endif %}
 </tr>
 <tr>
   <td valign="top">Octave:</td>
   <td>{{ radios("octave", opts.octave, [("-1", "lower"), ("0", "as chosen"), ("1", "higher")]) }}</td>
 </tr>
+{% if not score %}
 <tr>
   <td valign="top">Beat:</td>
   <td>{{ radios("tempo", opts.tempo, [("0", "as heard"), ("-1", "half as fast"), ("1", "twice as fast")]) }}<br>
   <small>Notes look too short (lots of 16ths in a calm song)? Try twice as fast. Too long (half and whole notes in a lively song)? Try half as fast.</small></td>
 </tr>
+{% endif %}
 <tr>
   <td valign="top">Time:</td>
-  <td>{{ radios("meter", opts.meter, [("auto", "as heard"), ("2/4", "2/4"), ("3/4", "3/4"), ("4/4", "4/4"), ("3/8", "3/8"), ("6/8", "6/8"), ("9/8", "9/8"), ("12/8", "12/8")]) }}<br>
+  <td>{{ radios("meter", opts.meter, [("auto", "as written" if score else "as heard"), ("2/4", "2/4"), ("3/4", "3/4"), ("4/4", "4/4"), ("3/8", "3/8"), ("6/8", "6/8"), ("9/8", "9/8"), ("12/8", "12/8")]) }}<br>
   <small>If the bars feel too long or too short, try another. Music that sways in threes (jigs, lullabies, barcarolles) is usually 6/8 or 12/8: each beat you'd tap holds three 8th notes.</small></td>
 </tr>
+{% if not score or score.origin == "midi" %}
 <tr>
   <td valign="top">Bar lines:</td>
-  <td>{{ radios("barshift", opts.barshift, [("0", "as heard"), ("1", "1 beat later"), ("2", "2 beats later"), ("3", "3 beats later")]) }}<br>
-  <small>If the strong beats don't land at the start of each bar, move the bar lines.</small></td>
+  <td>{{ radios("barshift", opts.barshift, [("0", "as heard" if not score else "as found"), ("1", "1 beat later"), ("2", "2 beats later"), ("3", "3 beats later")]) }}<br>
+  <small>If the strong beats don't land at the start of each bar, move the bar lines.{% if score %} A MIDI file doesn't say where its bars start, so this guesses.{% endif %}</small></td>
 </tr>
+{% endif %}
 <tr>
   <td valign="top">Easier:</td>
   <td><label><input type="checkbox" name="simple" value="1"{% if opts.simple %} checked{% endif %}> Make it easier to play (fewer fast notes)</label><br>
   <label><input type="checkbox" name="easy_key" value="1"{% if opts.easy_key %} checked{% endif %}> Move to an easier key</label></td>
+</tr>
+<tr>
+  <td valign="top">Expression:</td>
+  <td>{{ radios("expression", opts.expression, [("plain", "plain"), ("expressive", "expressive"), ("ornaments", "with ornaments")]) }}<br>
+  <small>Expressive adds louder and softer (p, f, swells), slurs, staccatos, slowing down and a tempo word, read from how the recording is played; with ornaments also adds a few trills, turns and grace notes.</small></td>
 </tr>
 <tr>
   <td valign="top">Piano part:</td>
@@ -104,7 +118,7 @@
 </tr>
 <tr>
   <td>Original:</td>
-  <td>{% if original_url %}<audio controls preload="none" src="{{ original_url }}"></audio>{% elif original_is_midi %}<small>It's a MIDI file, so it can't be played here.</small>{% else %}<small>Not found.</small>{% endif %}</td>
+  <td>{% if original_url %}<audio controls preload="none" src="{{ original_url }}"></audio>{% elif original_is_midi %}<small>It's a MIDI file, so it can't be played here.</small>{% elif original_is_score %}<small>It's sheet music, so there's no recording to play.</small>{% else %}<small>Not found.</small>{% endif %}</td>
 </tr>
 </table>
 

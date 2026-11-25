@@ -1,6 +1,7 @@
 """Command line: arrange one file without the web page.
 
     .venv/bin/python -m sheetswap.cli song.mp3 --mode duet
+    .venv/bin/python -m sheetswap.cli sonata.musicxml --part "Violin"   # sheet music in
 """
 from __future__ import annotations
 
@@ -61,6 +62,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="move the bar lines this many beats later")
     ap.add_argument("--tempo", type=int, default=0, choices=[-1, 0, 1],
                     help="-1 = half as fast, 1 = twice as fast")
+    ap.add_argument("--expression", default="expressive",
+                    choices=["plain", "expressive", "ornaments"],
+                    help="plain notes; dynamics, slurs, staccatos and tempo words from the "
+                         "playing (default); or those plus a few ornaments")
+    ap.add_argument("--part", default="auto",
+                    help="sheet music (.musicxml, .mxl, .xml) or a written MIDI file: which part "
+                         "is the tune, by number (as listed) or name, e.g. 'Violin I' (default: auto)")
     ap.add_argument("--song-dir", type=Path, help="re-use an existing song folder")
     return ap
 
@@ -86,7 +94,12 @@ def main(argv: list[str] | None = None) -> None:
     _set_meta(song_dir, status="done", kind=an.kind)
     opts = ArrangeOptions(mode=a.mode, melody_source=a.melody, octave=a.octave,
                           simple=a.simple, easy_key=a.easy_key, piano_style=a.piano_style,
-                          meter=a.meter, barshift=a.barshift, tempo=a.tempo)
+                          meter=a.meter, barshift=a.barshift, tempo=a.tempo,
+                          expression=a.expression, part=a.part)
+    source = getattr(an, "score", None)
+    if source is not None:                # sheet music: list the parts --part can pick
+        for i, p in enumerate(source.parts):
+            print(f"  part {i}: {p.label}{'  (auto)' if i == source.auto_part else ''}")
     res = pipeline.arrange_and_render(song_dir, opts)
     arr = res["arr"]
     print(f"[{time.time() - t0:6.1f}s] done: kind={an.kind} flute notes={len(arr.flute)} "

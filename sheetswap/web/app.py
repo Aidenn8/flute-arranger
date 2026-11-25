@@ -35,8 +35,9 @@ from .. import config
 from ..model import DOTTED_BEAT, EIGHTH_BEAT, ArrangeOptions
 
 UPLOAD_TYPES = ("mp3", "wav", "m4a", "aac", "flac", "ogg", "oga", "opus", "webm", "aiff", "aif",
-                "mid", "midi")
+                "mid", "midi", "musicxml", "mxl", "xml")
 MIDI_TYPES = ("mid", "midi")
+SCORE_TYPES = ("musicxml", "mxl", "xml")     # sheet music: the flute part gets its exact notes
 MAX_UPLOAD_MB = 200
 KINDS = ("auto", "piano", "ensemble", "song", "band")
 MODES = ("solo", "duet")
@@ -284,12 +285,24 @@ def tempo_text(bpm: float, beat_ticks: int) -> str:
 def _query(opts: ArrangeOptions) -> dict:
     q = {"mode": opts.mode, "melody_source": opts.melody_source,
          "octave": opts.octave, "piano_style": opts.piano_style, "meter": opts.meter,
-         "barshift": opts.barshift, "tempo": opts.tempo}
+         "barshift": opts.barshift, "tempo": opts.tempo, "expression": opts.expression}
     if opts.simple:
         q["simple"] = "1"
     if opts.easy_key:
         q["easy_key"] = "1"
+    if opts.part != "auto":
+        q["part"] = opts.part
     return q
+
+
+def _score_page(d: Path) -> dict | None:
+    """For a song read from sheet music (or a written MIDI file): the
+    "Which part is the tune?" choices and where the score came from."""
+    from ..score_input import part_choices, score_origin
+    choices = part_choices(d)
+    if not choices:
+        return None
+    return {"parts": choices, "origin": score_origin(d)}
 
 
 def _file_url(song_id: str, d: Path, path, download: bool = False) -> str | None:
@@ -476,7 +489,8 @@ def upload():
     ext = _ext(filename)
     if ext not in UPLOAD_TYPES:
         return _index(error=f'Sorry, "{filename}" isn\'t a file this can read. Please upload '
-                            "audio (mp3, wav, m4a, aac, flac or ogg) or MIDI (mid or midi)."), 400
+                            "audio (mp3, wav, m4a, aac, flac or ogg), MIDI (mid or midi) or "
+                            "sheet music (MusicXML: musicxml, mxl or xml)."), 400
     kind = request.form.get("kind")
     kind = kind if kind in KINDS else "auto"
     mode = request.form.get("mode")
@@ -513,7 +527,8 @@ def song(song_id: str):
 
     opts = options_for(meta, request.args.to_dict())
     ctx = {"meta": meta, "state": "done", "opts": opts,
-           "print_url": url_for("print_page", song_id=song_id, **_query(opts))}
+           "print_url": url_for("print_page", song_id=song_id, **_query(opts)),
+           "score": _score_page(d)}
     try:
         result = _arrange(d, opts)
     except Exception as e:
@@ -528,7 +543,7 @@ def song(song_id: str):
                  "time": f"{num}/{den}", "tempo": tempo_text(arr.bpm, arr.beat_ticks)}
     ext = _ext(meta.get("filename", ""))
     original_url = None
-    if ext not in MIDI_TYPES:
+    if ext not in MIDI_TYPES and ext not in SCORE_TYPES:
         original_url = _file_url(song_id, d, d / f"input.{ext}")
     return render_template(
         "song.html", **ctx,
@@ -538,6 +553,7 @@ def song(song_id: str):
         preview_url=_file_url(song_id, d, result.get("mp3")),
         original_url=original_url,
         original_is_midi=ext in MIDI_TYPES,
+        original_is_score=ext in SCORE_TYPES,
         musicxml_url=_file_url(song_id, d, result.get("musicxml"), download=True),
         midi_url=_file_url(song_id, d, result.get("midi"), download=True),
     )
