@@ -234,6 +234,23 @@ class ArrangeOptions:
 
 
 @dataclass
+class Mark:
+    """An expression mark on the flute part, in ticks like QNote (0 = first downbeat).
+
+    kind: "dynamic" (value p, pp, mp, mf, f, ff, sf, fp), "cresc" / "dim"
+    (hairpin from start to end), "slur" (start..end, first and last note),
+    "staccato", "tenuto", "accent", "fermata", "trill", "mordent", "turn",
+    "grace" (value = MIDI pitch of a grace note before the note at start),
+    "text" (value = words: "dolce", "rit.", "Andante espressivo", ...).
+    Single-note marks attach to the flute note that starts at `start`.
+    """
+    kind: str
+    start: int
+    end: int = 0
+    value: str = ""
+
+
+@dataclass
 class Arrangement:
     flute: list[QNote]
     rh: list[QNote] = field(default_factory=list)
@@ -245,6 +262,7 @@ class Arrangement:
     shift: int = 0
     warnings: list[str] = field(default_factory=list)
     beat_ticks: int = QUARTER_BEAT
+    expression: list[Mark] = field(default_factory=list)
 
     @property
     def bar_ticks(self) -> int:

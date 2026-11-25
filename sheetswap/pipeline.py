@@ -9,7 +9,7 @@ from typing import Callable
 
 import numpy as np
 
-from .model import (DOTTED_BEAT, EIGHTH_BEAT, METERS, Analysis, ArrangeOptions, Arrangement,
+from .model import (DOTTED_BEAT, EIGHTH_BEAT, METERS, Analysis, ArrangeOptions, Arrangement, Mark,
                     BeatGrid, Note, QNote)
 
 ProgressFn = Callable[[int, int, str], None]
@@ -394,6 +394,7 @@ def _arr_from_json(d: dict) -> Arrangement:
     d = dict(d)
     for k in ("flute", "rh", "lh"):
         d[k] = [QNote(**q) for q in d.get(k, [])]
+    d["expression"] = [Mark(**m) for m in d.get("expression", [])]
     return Arrangement(**d)
 
 
