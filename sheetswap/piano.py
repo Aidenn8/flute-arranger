@@ -4,10 +4,14 @@ The flute carries the tune; the piano holds the harmony and bass underneath
 it. No piano note ever sounds at or above a flute note it overlaps.
 
 Two styles:
-- "chords": a chord per half bar (a whole bar in 3/4). Left hand holds the
-  root in the bass register; right hand plays a close-position triad that
-  moves to the nearest voicing of the next chord and stays at least
-  CHORD_GAP semitones under the lowest flute note it overlaps.
+- "chords": the chords harmony.harmonize finds (from the accompaniment, the
+  tune and the key; from the tune alone when the accompaniment is too thin),
+  struck where they change and again each bar. Left hand holds the real bass
+  note in the bass register: the root, or the 3rd/5th for an inversion.
+  Right hand plays three chord tones in close position (a seventh chord
+  leaves out the tone the bass has), moving to the nearest voicing of the
+  next chord and staying at least CHORD_GAP semitones under the lowest
+  flute note it overlaps.
 - "cleaned": the transcription itself minus the tune, quantized to 8ths,
   split into hands, thinned, and pushed under the flute.
 
@@ -21,7 +25,7 @@ from collections import Counter, defaultdict
 from math import floor
 
 from .config import TICKS_PER_BEAT
-from .harmony import chord_spans
+from .harmony import Chord, harmonize
 from .model import BeatGrid, Note, QNote
 
 LH_LOW, LH_HIGH = 36, 47     # chords style: bass note register (C2..B2)
@@ -137,9 +141,18 @@ def _fold(pitch: int) -> int:
 
 # ---------------------------------------------------------------- chords style
 
-def _chord_tones(root: int, quality: str, shift: int) -> tuple[int, int, int]:
-    third = 4 if quality == "maj" else 3
-    return tuple((root + i + shift) % 12 for i in (0, third, 7))
+def _rh_tones(chord: Chord, shift: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """(right-hand pitch classes, the ones to keep when only two fit).
+
+    Triads: all three. Seventh chords: the three tones the bass doesn't play
+    (Gmaj7 over G: B D F#). The third (and seventh) matter most."""
+    tones = chord.tones
+    rh = tones
+    if len(tones) == 4:
+        rh = tuple(t for t in tones if t != chord.bass)[:3]
+    guide = (tones[1],) + ((tones[3],) if len(tones) == 4 else ())
+    return (tuple((t + shift) % 12 for t in rh),
+            tuple((t + shift) % 12 for t in guide))
 
 
 def _close_voicings(tones: tuple[int, ...], lo: int, hi: int, size: int) -> list[tuple[int, ...]]:
@@ -173,47 +186,41 @@ def _nearest(cands: list[tuple[int, ...]], prev: tuple[int, ...] | None) -> tupl
     return min(cands, key=cost)
 
 
-def _voice(tones: tuple[int, int, int], ceiling: int | None,
-           prev: tuple[int, ...] | None) -> tuple[int, ...]:
-    """Right-hand chord under the flute: a triad in RH_LOW..RH_HIGH; if the
-    flute is too low for that, a triad reaching down to RH_FLOOR; then two
-    chord tones (with the third if possible); else nothing."""
+def _voice(tones: tuple[int, ...], ceiling: int | None, prev: tuple[int, ...] | None,
+           guide: tuple[int, ...] = ()) -> tuple[int, ...]:
+    """Right-hand chord under the flute: three chord tones in close position
+    in RH_LOW..RH_HIGH; if the flute is too low for that, reaching down to
+    RH_FLOOR; then two chord tones (with the third if possible); else nothing."""
     top = RH_HIGH if ceiling is None else min(RH_HIGH, ceiling - CHORD_GAP)
     for lo in (RH_LOW, RH_FLOOR):
         cands = _close_voicings(tones, lo, top, 3)
         if cands:
             return _nearest(cands, prev)
     pairs = _close_voicings(tones, RH_FLOOR, top, 2)
-    pairs = [v for v in pairs if tones[1] in {p % 12 for p in v}] or pairs
+    pairs = [v for v in pairs if set(guide) & {p % 12 for p in v}] or pairs
     return _nearest(pairs, prev) if pairs else ()
 
 
-def _span_ticks(beats_per_bar: int) -> int:
-    bar = beats_per_bar * TICKS_PER_BEAT
-    return bar // 2 if beats_per_bar % 2 == 0 else bar
+def _velocity(level: float) -> int:
+    return max(36, min(72, round(0.75 * level)))
 
 
-def _chords_style(notes, flute: _FluteFloor, grid: BeatGrid, shift: int, bass):
-    bar = grid.beats_per_bar * TICKS_PER_BEAT
-    span = _span_ticks(grid.beats_per_bar)
-    rows: list[list] = []                     # [start, dur, lh pitch, rh voicing, velocity]
-    prev = None
-    for k, root, quality, level in chord_spans(notes, grid, span, bass):
-        start = k * span
-        if start < 0:                         # the pickup belongs to the flute alone
+def _chords_style(notes, flute_notes, flute: _FluteFloor, grid: BeatGrid, shift: int, bass, key):
+    tune = [QNote(q.pitch - shift, q.start, q.dur) for q in flute_notes]
+    rh_notes, lh_notes, prev = [], [], None
+    # one Chord per run of the same harmony inside a bar, so it is held to its
+    # end and struck again each bar; the pickup belongs to the flute alone
+    for c in harmonize(notes, grid, bass, tune, key):
+        if c.start < 0:
             continue
-        tones = _chord_tones(root, quality, shift)
-        rh = _voice(tones, flute.lowest(start, start + span), prev)
+        tones, guide = _rh_tones(c, shift)
+        rh = _voice(tones, flute.lowest(c.start, c.end), prev, guide)
         prev = rh or prev
-        lh = LH_LOW + (tones[0] - LH_LOW) % 12
-        last = rows[-1] if rows else None
-        if (last and last[0] + last[1] == start and (last[2], last[3]) == (lh, rh)
-                and last[0] // bar == (start + span - 1) // bar):
-            last[1] += span                   # same chord, same bar: hold it
-            continue
-        rows.append([start, span, lh, rh, max(36, min(72, round(0.75 * level)))])
-    rh_notes = [QNote(p, s, d, v) for s, d, _, rh, v in rows for p in rh]
-    lh_notes = [QNote(lh, s, d, min(78, v + 6)) for s, d, lh, _, v in rows]
+        velocity = _velocity(c.level)
+        rh_notes += [QNote(p, c.start, c.dur, velocity) for p in rh]
+        # left hand: the real bass note (the root, or the 3rd/5th of an inversion)
+        lh_notes.append(QNote(LH_LOW + ((c.bass + shift) - LH_LOW) % 12, c.start, c.dur,
+                              min(78, velocity + 6)))
     return (_keep_under(rh_notes, flute, CHORD_GAP),
             _keep_under(lh_notes, flute, SAFE_GAP))
 
@@ -291,18 +298,22 @@ def _cleaned_style(notes, flute_notes, flute: _FluteFloor, grid: BeatGrid, shift
 
 
 def accompany(notes: list[Note], flute: list[QNote], grid: BeatGrid, style: str,
-              shift: int = 0, bass: list[Note] | None = None) -> tuple[list[QNote], list[QNote]]:
+              shift: int = 0, bass: list[Note] | None = None,
+              key: tuple[int, str] | None = None) -> tuple[list[QNote], list[QNote]]:
     """(right hand, left hand) under the flute line.
 
     `notes` are the transcribed accompaniment notes (seconds, original key);
     `flute` is the finished flute line (ticks, already transposed and moved
     into range); `shift` is the key transposition given to the flute, added
     here to every piano pitch. The flute's octave moves are not applied.
-    `bass` (optional) is a separate bass line that helps pick chord roots
-    and, in the cleaned style, joins the source notes."""
+    `bass` (optional) is a separate bass line that gives the chords' bass
+    notes and, in the cleaned style, joins the source notes. `key` is
+    (fifths, mode) of the original notes; detected when left out.
+    In the chords style the tune helps choose the chords, and when the
+    accompaniment is too thin to follow, the tune is harmonized instead."""
     floor_ = _FluteFloor(flute)
     if style == "chords":
-        return _chords_style(notes, floor_, grid, shift, bass)
+        return _chords_style(notes, flute, floor_, grid, shift, bass, key)
     if style == "cleaned":
         return _cleaned_style(notes, flute, floor_, grid, shift, bass)
     raise ValueError(f"unknown piano style: {style!r}")

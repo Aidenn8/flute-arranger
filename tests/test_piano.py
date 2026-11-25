@@ -208,3 +208,66 @@ def test_piano_never_above_flute():
                     assert len({n.pitch for n in ns}) == len(ns)
                     if i + 1 < len(groups):
                         assert start + ns[0].dur <= groups[i + 1][0]
+
+
+def _under_flute(hand, flute, margin):
+    return all(p.pitch <= f.pitch - margin for p in hand for f in flute if _overlaps(p, f))
+
+
+def test_maj7_voicing_over_the_bass():
+    # Gymnopedie-style 3/4: G2 / D2 in the left hand, B-D-F# / A-C#-F# in the right
+    beat = 0.7
+    g = BeatGrid([i * beat for i in range(28)], 3, 0)
+    notes = []
+    for b in range(8):
+        t0 = 3 * b * beat
+        bass, chord = ((43, (59, 62, 66)) if b % 2 == 0 else (38, (57, 61, 66)))
+        notes.append(Note(bass, t0, t0 + 3 * beat, 60))
+        notes += [Note(p, t0 + beat, t0 + 3 * beat, 55) for p in chord]
+    flute = [QNote(p, 12 * i, 12) for i, p in
+             enumerate([0, 90, 93, 91, 90, 85, 83, 85, 86, 81, 81, 81]) if p]
+    rh, lh = accompany(notes, flute, g, "chords")
+    assert [(n.start, n.pitch) for n in sorted(lh, key=lambda n: n.start)] == [
+        (36 * b, 43 if b % 2 == 0 else 38) for b in range(8)]
+    for s, ns in _by_onset(rh).items():
+        want = {11, 2, 6} if (s // 36) % 2 == 0 else {9, 1, 6}     # no doubled root
+        assert len(ns) == 3 and {n.pitch % 12 for n in ns} == want
+    assert _under_flute(rh, flute, 3) and _under_flute(lh, flute, 1)
+
+
+def test_lh_plays_the_real_bass_note():
+    chord = [Note(p, 0.0, 2.0, 70) for p in (60, 64, 67)]
+    flute = [QNote(84, 0, 48)]
+    for low, lh_pitch in ((36, 36), (40, 40), (43, 43), (28, 40)):  # C, C/E, C/G, C/E
+        rh, lh = accompany(chord + [Note(low, 0.0, 2.0, 80)], flute, _grid(), "chords")
+        assert {n.pitch for n in lh} == {lh_pitch}
+        assert {n.pitch % 12 for n in rh} == {0, 4, 7}
+    rh, lh = accompany(chord, flute, _grid(), "chords", bass=[Note(52, 0.0, 2.0, 80)])
+    assert {n.pitch for n in lh} == {40}                         # bass part E3 -> E2
+    rh, lh = accompany(chord, flute, _grid(), "chords", shift=2, bass=[Note(40, 0.0, 2.0, 80)])
+    assert {n.pitch for n in lh} == {42} and {n.pitch % 12 for n in rh} == {2, 6, 9}
+
+
+def test_tune_decides_the_chord():
+    acc = [Note(64, 0.0, 2.0, 70), Note(67, 0.0, 2.0, 70)]      # E + G: C or Em?
+    for tune, root, third in ((84, 0, 4), (83, 4, 7)):            # C6 -> C, B5 -> Em
+        rh, lh = accompany(acc, [QNote(tune, 0, 48)], _grid(), "chords")
+        assert {n.pitch % 12 for n in lh} == {root}
+        assert third in {n.pitch % 12 for n in rh}
+
+
+def test_thin_accompaniment_follows_the_tune():
+    # a tune with just a stray note or two under it still gets I IV V I
+    tune = [76, 79, 84, 79, 77, 81, 84, 81, 74, 79, 83, 79, 84]
+    for shift in (0, 3):
+        flute = [QNote(p + shift, 12 * i, 12 if i < 12 else 48) for i, p in enumerate(tune)]
+        for notes in ([Note(30, 0.1, 0.2, 40)], [Note(40, 0.0, 0.3, 50), Note(90, 2.0, 2.2, 30)]):
+            rh, lh = accompany(notes, flute, _grid(), "chords", shift=shift)
+            assert [(n.start, n.pitch % 12) for n in sorted(lh, key=lambda n: n.start)] == [
+                (s, (r + shift) % 12) for s, r in ((0, 0), (48, 5), (96, 7), (144, 0))]
+            assert all(36 <= n.pitch <= 47 for n in lh)
+            # every downbeat's tune note is in the right-hand chord
+            for s, ns in _by_onset(rh).items():
+                f = next(q for q in flute if q.start == s)
+                assert f.pitch % 12 in {n.pitch % 12 for n in ns}
+            assert _under_flute(rh, flute, 3) and _under_flute(lh, flute, 1)
