@@ -20,7 +20,6 @@
 - In duet mode, no piano note sounds at or above the flute note sounding at the same time.
 - Old-web UI: server-rendered HTML, browser default serif font, default blue links, `<hr>`, `<table border=1>`; no CSS frameworks, no JS frameworks, no animations. Small inline `<style>` only for the print page.
 - Server: Flask on `http://localhost:5230`. All song data under `out/<song_id>/` (git-ignored). Models and soundfont under `models/` (git-ignored).
-- No Claude mentions in repo files or commits. Commits use the configured noreply identity.
 - Never open browser tabs or players automatically.
 
 ## Review Focus

@@ -1,5 +1,7 @@
 # Flute Arranger
 
+> **Work in progress.** This is an active, unfinished project: it works end to end, but accuracy on recordings is still being improved (about 3 in 4 notes land exactly right; sheet-music files and screenshots are close to exact). Expect rough edges and breaking changes.
+
 Turn a song you like into flute sheet music you can play: the flute part alone, or the flute on top with a simple piano part underneath that supports it.
 
 You give it a recording (mp3, wav, m4a, flac, ogg, opus, aiff) or a MIDI file. It listens for the tune, moves it into the flute's range, writes it out with a clean rhythm, and shows the score in a plain web page you can print. Everything runs on your own Mac; nothing is uploaded anywhere.
