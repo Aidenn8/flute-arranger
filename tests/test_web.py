@@ -235,7 +235,7 @@ def test_song_page_time_choices(client, out, monkeypatch):
 
     def compound(song_dir, opts):
         res = plain(song_dir, opts)
-        res["arr"] = Arrangement(flute=[], beats_per_bar=2, beat_ticks=18, bpm=60.2)
+        res["arr"] = Arrangement(flute=[], beats_per_bar=2, beat_ticks=72, bpm=60.2)
         return res
     stub_pipeline(monkeypatch, arrange_and_render=compound)
     make_song(out, "abc12345")
@@ -254,7 +254,7 @@ def test_song_page_time_choices(client, out, monkeypatch):
     # a link from before 6/8 existed
     client.get("/song/abc12345?meter=3")
     assert calls[-1].meter == "3/4"
-    assert web.tempo_text(92.4, 12) == "92" and web.tempo_text(150, 6) == "150 (counting eighths)"
+    assert web.tempo_text(92.4, 48) == "92" and web.tempo_text(150, 24) == "150 (counting eighths)"
 
 
 def test_song_page_notation_check(client, out, monkeypatch):
@@ -431,3 +431,112 @@ def test_upload_mixing_pictures_and_audio_is_refused(client, out):
     resp = client.post("/upload", content_type="multipart/form-data", data={
         "file": [(io.BytesIO(b"x"), "a.png"), (io.BytesIO(b"y"), "b.mp3")]})
     assert resp.status_code == 400 and "pictures of sheet music" in resp.get_data(as_text=True)
+
+
+# ---------------------------------------------------------------- tap the beat
+
+def _tap_form(n=12, step=0.5, bars=""):
+    return {"taps": ",".join(f"{2 + i * step:.3f}" for i in range(n)), "bars": bars,
+            "mode": "duet", "octave": "1", "tempo": "-1", "meter": "6/8", "barshift": "2"}
+
+
+def test_song_page_has_tap_box_for_recordings(client, out, monkeypatch):
+    stub_pipeline(monkeypatch, arrange_and_render=fake_arrange([]))
+    d = make_song(out, "abc12345", mode="duet")
+    html = client.get("/song/abc12345?octave=1&tempo=-1").get_data(as_text=True)
+    assert "Tap the beat" in html and 'action="/song/abc12345/taps"' in html
+    assert 'id="tap-audio"' in html and 'src="/song/abc12345/file/input.mp3"' in html
+    assert 'id="tap-button"' in html and "Taps: 0" in html and 'value="Use my taps"' in html
+    assert "audio.currentTime" in html
+    assert '<input type="hidden" name="octave" value="1">' in html        # options kept
+    assert '<input type="hidden" name="tempo"' not in html                # the taps set the beat
+    assert "Undo taps" not in html
+    (d / "taps.json").write_text(json.dumps({"taps": [1.0] * 12, "bars": [1.0] * 3, "auto_grid": {}}))
+    html = client.get("/song/abc12345").get_data(as_text=True)
+    assert "from your 12 taps and 3 bar starts" in html
+    assert 'action="/song/abc12345/taps/undo"' in html and 'value="Undo taps"' in html
+    assert "slips against your taps" not in html
+    (d / "taps.json").write_text(json.dumps({"taps": [20.0, 30.0], "bars": [], "auto_grid": {},
+                                             "needs_more": True}))
+    html = client.get("/song/abc12345").get_data(as_text=True)
+    assert "(0:20 to 0:30;" in html and "slips against your taps" in html
+
+
+def test_no_tap_box_for_sheet_music_or_pictures(client, out, monkeypatch):
+    stub_pipeline(monkeypatch, arrange_and_render=fake_arrange([]))
+    d = make_song(out, "aaaa1111", filename="Tune.musicxml")
+    (d / "input.mp3").unlink()
+    (d / "input.musicxml").write_text("<score-partwise/>")
+    html = client.get("/song/aaaa1111").get_data(as_text=True)
+    assert "<text>page one</text>" in html and "Tap the beat" not in html
+    d = make_song(out, "bbbb2222", filename="page.png")
+    (d / "input.mp3").unlink()
+    (d / "input-01.png").write_bytes(b"\x89PNG")
+    html = client.get("/song/bbbb2222").get_data(as_text=True)
+    assert "<text>page one</text>" in html and "Tap the beat" not in html
+    assert client.post("/song/aaaa1111/taps", data=_tap_form()).status_code == 400
+    assert client.post("/song/bbbb2222/taps", data=_tap_form()).status_code == 400
+
+
+def test_post_taps(client, out, monkeypatch):
+    fake = stub_pipeline(monkeypatch)
+    calls = []
+    fake.apply_taps = lambda song_dir, taps, bars: calls.append((song_dir, taps, bars))
+    d = make_song(out, "abc12345")
+    resp = client.post("/song/abc12345/taps", data=_tap_form(bars="2.0,4.0, junk,nan"))
+    assert resp.status_code == 302
+    loc = resp.headers["Location"]
+    assert loc.startswith("/song/abc12345?")
+    assert "mode=duet" in loc and "octave=1" in loc
+    assert "tempo=0" in loc and "meter=auto" in loc and "barshift=0" in loc
+    song_dir, taps, bars = calls[-1]
+    assert song_dir == d and taps[:3] == [2.0, 2.5, 3.0] and len(taps) == 12
+    assert bars == [2.0, 4.0]
+    assert "12 taps" in (d / "log.txt").read_text()
+
+    client.post("/song/abc12345/taps", data=_tap_form())
+    assert calls[-1][2] is None                                  # no bar starts tapped
+
+    resp = client.post("/song/abc12345/taps", data=_tap_form(n=5))
+    assert resp.status_code == 400 and "at least 8" in resp.get_data(as_text=True)
+    assert len(calls) == 2
+
+    def unsteady(song_dir, taps, bars):
+        raise ValueError("The taps don't keep a steady beat.")
+    fake.apply_taps = unsteady
+    resp = client.post("/song/abc12345/taps", data=_tap_form())
+    assert resp.status_code == 400 and "steady beat" in resp.get_data(as_text=True)
+
+    make_song(out, "def67890", status="analyzing")
+    assert client.post("/song/def67890/taps", data=_tap_form()).status_code == 400
+    assert client.post("/song/0123abcd/taps", data=_tap_form()).status_code == 404
+    assert client.get("/song/abc12345/taps").status_code == 405
+
+
+def test_undo_taps_route(client, out, monkeypatch):
+    fake = stub_pipeline(monkeypatch)
+    undone = []
+    fake.undo_taps = lambda song_dir: undone.append(song_dir)
+    d = make_song(out, "abc12345")
+    resp = client.post("/song/abc12345/taps/undo", data={"mode": "duet", "octave": "-1"})
+    assert resp.status_code == 302 and "octave=-1" in resp.headers["Location"]
+    assert undone == [d]
+
+
+def test_taps_through_the_real_pipeline(client, out):
+    """POST taps -> analysis.json on the tapped beat (tracker "taps"); undo -> the old grid."""
+    from sheetswap.model import Analysis, BeatGrid, Note
+    d = make_song(out, "abc12345")
+    grid = BeatGrid([i * 0.5 for i in range(82)], 4, 2, tracker="neural")
+    notes = [Note(72 + i % 5, 1.0 + 0.5 * i, 1.4 + 0.5 * i, 80) for i in range(70)]
+    Analysis("abc12345", "piano", 40.0, grid, {"piano": notes}).save(d / "analysis.json")
+    (d / "arr").mkdir()
+    form = _tap_form(n=16, step=1.0, bars="2.000,5.000,8.000,11.000")
+    assert client.post("/song/abc12345/taps", data=form).status_code == 302
+    an = Analysis.load(d / "analysis.json")
+    assert an.grid.tracker == "taps" and an.grid.beats_per_bar == 3
+    assert abs(an.grid.bpm() - 60) < 1
+    assert (d / "taps.json").exists() and not (d / "arr").exists()
+    assert client.post("/song/abc12345/taps/undo").status_code == 302
+    assert Analysis.load(d / "analysis.json").grid == grid
+    assert not (d / "taps.json").exists()

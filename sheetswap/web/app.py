@@ -550,9 +550,15 @@ def song(song_id: str):
         return render_template("song.html", meta=meta, state="failed", log_tail=log_tail(d))
 
     opts = options_for(meta, request.args.to_dict())
+    ext = _ext(meta.get("filename", ""))
+    from_pictures = any(p.suffix.lower().lstrip(".") in IMAGE_TYPES for p in d.glob("input-*"))
+    original_url = None
+    if ext not in MIDI_TYPES and ext not in SCORE_TYPES and not from_pictures:
+        original_url = _file_url(song_id, d, d / f"input.{ext}")
     ctx = {"meta": meta, "state": "done", "opts": opts,
            "print_url": url_for("print_page", song_id=song_id, **_query(opts)),
-           "score": _score_page(d)}
+           "score": _score_page(d),
+           "tap": _tap_box(d, opts) if original_url else None}
     try:
         result = _arrange(d, opts)
     except Exception as e:
@@ -565,11 +571,6 @@ def song(song_id: str):
         num, den = arr.time_signature
         facts = {"key": key_name(arr.key_fifths, arr.key_mode),
                  "time": f"{num}/{den}", "tempo": tempo_text(arr.bpm, arr.beat_ticks)}
-    ext = _ext(meta.get("filename", ""))
-    from_pictures = any(p.suffix.lower().lstrip(".") in IMAGE_TYPES for p in d.glob("input-*"))
-    original_url = None
-    if ext not in MIDI_TYPES and ext not in SCORE_TYPES and not from_pictures:
-        original_url = _file_url(song_id, d, d / f"input.{ext}")
     return render_template(
         "song.html", **ctx,
         svgs=list(result.get("svgs") or []),
@@ -583,6 +584,101 @@ def song(song_id: str):
         musicxml_url=_file_url(song_id, d, result.get("musicxml"), download=True),
         midi_url=_file_url(song_id, d, result.get("midi"), download=True),
     )
+
+
+# ---------------------------------------------------------------- tap the beat
+
+MAX_TAPS = 5000
+_TAP_RESETS = {"tempo": 0, "meter": "auto", "barshift": 0}   # the taps set the beat, time and bars
+
+
+def _tap_box(d: Path, opts: ArrangeOptions) -> dict:
+    """The song page's "Tap the beat" box (recordings only): the options to keep
+    after tapping, and how many taps set the beat now (none: the automatic one)."""
+    from ..taps import MIN_TAPS, load_taps
+    saved = load_taps(d) or {}
+    taps = [t for t in saved.get("taps", []) if isinstance(t, (int, float))]
+    keep = {k: v for k, v in _query(opts).items() if k not in _TAP_RESETS}
+
+    def clock(s: float) -> str:
+        return f"{int(s) // 60}:{int(s) % 60:02d}"
+    return {"min": MIN_TAPS, "keep": keep, "active": bool(saved),
+            "count": len(taps), "bars": len(saved.get("bars", [])),
+            "needs_more": bool(saved.get("needs_more")),
+            "span": f"{clock(min(taps))} to {clock(max(taps))}" if taps else ""}
+
+
+def _times(text: str | None) -> list[float]:
+    """"1.25,2.5,..." from the tap form -> seconds (bad or out-of-range values left out)."""
+    out = []
+    for part in (text or "").replace(";", ",").split(",")[:MAX_TAPS]:
+        try:
+            v = float(part)
+        except ValueError:
+            continue
+        if 0.0 <= v <= config.MAX_SECONDS * 2:
+            out.append(v)
+    return out
+
+
+def _back_to_song(song_id: str, form: Mapping):
+    opts = ArrangeOptions.from_form(form)
+    for k, v in _TAP_RESETS.items():
+        setattr(opts, k, v)
+    return redirect(url_for("song", song_id=song_id, **_query(opts)))
+
+
+def _tappable(song_id: str) -> Path:
+    """The folder of a finished recording (taps don't apply to MIDI or sheet music)."""
+    d, meta = _require_song(song_id)
+    not_audio = MIDI_TYPES + SCORE_TYPES + IMAGE_TYPES
+    recording = any(p.suffix.lower().lstrip(".") in UPLOAD_TYPES
+                    and p.suffix.lower().lstrip(".") not in not_audio for p in d.glob("input.*"))
+    if meta.get("status") != "done" or not recording:
+        abort(400)
+    return d
+
+
+@app.post("/song/<song_id>/taps")
+def song_taps(song_id: str):
+    """Use the beat the user tapped (see sheetswap.taps)."""
+    from ..taps import MIN_TAPS
+    d = _tappable(song_id)
+    taps = _times(request.form.get("taps"))
+    bars = _times(request.form.get("bars"))
+    back = url_for("song", song_id=song_id)
+    if len(taps) < MIN_TAPS:
+        return render_template("message.html", title="Not enough taps",
+                               message=f"Tap at least {MIN_TAPS} beats while the song plays, "
+                                       "then press the button again.", back_url=back), 400
+    try:
+        with _arrange_lock:
+            _pipeline().apply_taps(d, taps, bars or None)
+    except ValueError as e:
+        return render_template("message.html", title="Couldn't use those taps",
+                               message=str(e), back_url=back), 400
+    except Exception as e:
+        log(d, "Could not use the tapped beat:\n" + traceback.format_exc())
+        return render_template("message.html", title="Couldn't use those taps",
+                               message=_friendly_error(e), back_url=back), 500
+    log(d, f"Beat tapped by hand: {len(taps)} taps, {len(bars)} bar starts")
+    return _back_to_song(song_id, request.form)
+
+
+@app.post("/song/<song_id>/taps/undo")
+def song_taps_undo(song_id: str):
+    """Back to the beat found automatically."""
+    d = _tappable(song_id)
+    try:
+        with _arrange_lock:
+            _pipeline().undo_taps(d)
+    except Exception as e:
+        log(d, "Could not go back to the automatic beat:\n" + traceback.format_exc())
+        return render_template("message.html", title="Couldn't undo the taps",
+                               message=_friendly_error(e),
+                               back_url=url_for("song", song_id=song_id)), 500
+    log(d, "Back to the automatic beat")
+    return _back_to_song(song_id, request.form)
 
 
 @app.get("/song/<song_id>/print")

@@ -26,7 +26,7 @@ def grid(n_beats=200, beat=BEAT, slow_from=None, slow=1.0):
         if slow_from is not None and i >= slow_from:
             gap *= slow
         t += gap
-    return BeatGrid(beats=beats, beats_per_bar=4, first_downbeat=0, beat_ticks=12)
+    return BeatGrid(beats=beats, beats_per_bar=4, first_downbeat=0, beat_ticks=48)
 
 
 def perform(spec, g=None, sound=0.97):
@@ -38,7 +38,7 @@ def perform(spec, g=None, sound=0.97):
         p, s, d, v = item[:4]
         frac = item[4] if len(item) > 4 else sound
         line.append(QNote(p, s, d, v))
-        t0, t1 = g.to_seconds(s / 12), g.to_seconds((s + d) / 12)
+        t0, t1 = g.to_seconds(s / 48), g.to_seconds((s + d) / 48)
         played.append(Note(p, t0, t0 + frac * (t1 - t0), v))
     return line, played, g
 
@@ -59,24 +59,24 @@ def test_louder_phrases_get_louder_dynamics():
     # four 2-bar phrases (7 quarters + a rest), each played louder than the last
     spec = []
     for k, base in enumerate((44, 60, 76, 92)):
-        spec += [(72 + i % 5, 96 * k + 12 * i, 12, base + i) for i in range(7)]
+        spec += [(72 + i % 5, 384 * k + 48 * i, 48, base + i) for i in range(7)]
     line, played, g = perform(spec)
     marks = add_expression(arrangement(line), played, g)
     dyn = kinds(marks, "dynamic")
     levels = [DYNAMICS.index(m.value) for m in dyn]
     assert len(dyn) >= 3 and dyn[0].start == 0
     assert levels == sorted(levels) and levels[-1] - levels[0] >= 2
-    assert all(b.start - a.start >= 2 * 48 for a, b in zip(dyn, dyn[1:]))   # 2 bars apart
+    assert all(b.start - a.start >= 2 * 192 for a, b in zip(dyn, dyn[1:]))  # 2 bars apart
     assert not kinds(marks, "dim")
 
 
 def test_crescendo_gets_a_hairpin_and_steady_playing_does_not():
-    spec = [(72 + i % 4, 12 * i, 12, 50 + 2 * i) for i in range(24)]     # 6 bars, steadily louder
+    spec = [(72 + i % 4, 48 * i, 48, 50 + 2 * i) for i in range(24)]     # 6 bars, steadily louder
     line, played, g = perform(spec)
     marks = add_expression(arrangement(line), played, g)
     cresc = kinds(marks, "cresc")
     assert cresc and not kinds(marks, "dim")
-    assert max(m.end - m.start for m in cresc) >= 48                      # at least a bar
+    assert max(m.end - m.start for m in cresc) >= 192                     # at least a bar
     steady = [(p, s, d, 80) for p, s, d, _ in spec]
     line, played, g = perform(steady)
     marks = add_expression(arrangement(line), played, g)
@@ -88,52 +88,58 @@ def test_crescendo_gets_a_hairpin_and_steady_playing_does_not():
 
 
 def test_staccato_when_notes_sound_short_but_not_at_the_phrase_end():
-    short = [(72 + i, 12 * i, 12, 80, 0.3) for i in range(6)]            # played detached
+    short = [(72 + i, 48 * i, 48, 80, 0.3) for i in range(6)]            # played detached
     line, played, g = perform(short)
     marks = add_expression(arrangement(line), played, g)
     stacc = {m.start for m in kinds(marks, "staccato")}
-    assert stacc == {12 * i for i in range(5)}                            # not the last note
-    legato = [(72 + i, 12 * i, 12, 80) for i in range(6)]
+    assert stacc == {48 * i for i in range(5)}                            # not the last note
+    legato = [(72 + i, 48 * i, 48, 80) for i in range(6)]
     line, played, g = perform(legato)
     assert not kinds(add_expression(arrangement(line), played, g), "staccato")
 
 
 def test_fast_notes_never_read_as_staccato():
     # 16ths at 100 bpm (0.15 s): too fast to judge from the transcription
-    fast = [(72 + i % 3, 3 * i, 3, 80, 0.3) for i in range(16)]
+    fast = [(72 + i % 3, 12 * i, 12, 80, 0.3) for i in range(16)]
     line, played, g = perform(fast)
     assert not kinds(add_expression(arrangement(line), played, g), "staccato")
 
 
 def test_slurs_break_at_repeats_leaps_rests_and_staccatos():
-    spec = [(72, 0, 12, 80), (74, 12, 12, 80), (76, 24, 12, 80),     # steps: one slur
-            (76, 36, 12, 80), (77, 48, 12, 80),                       # repeated E: new slur
-            (89, 60, 12, 80), (88, 72, 12, 80),                       # leap of an octave: new slur
-            (86, 96, 12, 80), (84, 108, 12, 80, 0.3),                 # after a rest; staccato
-            (83, 120, 12, 80), (81, 132, 24, 80)]
+    spec = [(72, 0, 48, 80), (74, 48, 48, 80), (76, 96, 48, 80),     # steps: one slur
+            (76, 144, 48, 80), (77, 192, 48, 80),                     # repeated E: new slur
+            (89, 240, 48, 80), (88, 288, 48, 80),                     # leap of an octave: new slur
+            (86, 384, 48, 80), (84, 432, 48, 80, 0.3),                # after a rest; staccato
+            (83, 480, 48, 80), (81, 528, 96, 80)]
     line, played, g = perform(spec)
     marks = add_expression(arrangement(line), played, g)
     slurs = sorted((m.start, m.end) for m in kinds(marks, "slur"))
-    assert slurs == [(0, 24), (36, 48), (60, 72), (120, 132)]
-    assert [m.start for m in kinds(marks, "staccato")] == [108]
+    assert slurs == [(0, 96), (144, 192), (240, 288), (480, 528)]
+    assert [m.start for m in kinds(marks, "staccato")] == [432]
 
 
 def test_long_legato_runs_are_cut_into_slurs_of_two_bars_at_most():
-    spec = [(72 + (i % 8 if i % 16 < 8 else 8 - i % 8), 12 * i, 12, 80) for i in range(24)]
+    spec = [(72 + (i % 8 if i % 16 < 8 else 8 - i % 8), 48 * i, 48, 80) for i in range(24)]
     line, played, g = perform(spec)
     slurs = kinds(add_expression(arrangement(line), played, g), "slur")
     assert len(slurs) >= 3
-    assert all(m.end - m.start <= 2 * 48 for m in slurs)
+    assert all(m.end - m.start <= 2 * 192 for m in slurs)
     covered = sorted((m.start, m.end) for m in slurs)
     assert all(a[1] < b[0] for a, b in zip(covered, covered[1:]))        # no overlaps
 
 
+def test_two_notes_further_apart_than_a_slur_get_none():
+    # a note held three bars, legato into the next: no slur (it used to recurse forever)
+    line, played, g = perform([(72, 0, 576, 80), (74, 576, 48, 80)])
+    assert kinds(add_expression(arrangement(line), played, g), "slur") == []
+
+
 def test_accent_on_a_clearly_louder_weak_beat():
-    spec = [(72 + i % 3, 12 * i, 12, 120 if i == 5 else 70) for i in range(12)]
+    spec = [(72 + i % 3, 48 * i, 48, 120 if i == 5 else 70) for i in range(12)]
     line, played, g = perform(spec)
     marks = add_expression(arrangement(line), played, g)
-    assert [m.start for m in kinds(marks, "accent")] == [60]
-    loud_downbeat = [(p, s, d, 120 if s == 48 else 70) for p, s, d, _ in spec]
+    assert [m.start for m in kinds(marks, "accent")] == [240]
+    loud_downbeat = [(p, s, d, 120 if s == 192 else 70) for p, s, d, _ in spec]
     line, played, g = perform(loud_downbeat)
     assert not kinds(add_expression(arrangement(line), played, g), "accent")
 
@@ -142,13 +148,13 @@ def test_accent_on_a_clearly_louder_weak_beat():
 
 
 def test_fermata_on_a_long_last_note_and_rit_where_the_beat_slows():
-    spec = [(72 + i % 5, 12 * i, 12, 80) for i in range(30)] + [(72, 360, 48, 80)]
+    spec = [(72 + i % 5, 48 * i, 48, 80) for i in range(30)] + [(72, 1440, 192, 80)]
     g = grid(slow_from=26, slow=1.12)                     # the last two bars slow down
     line, played, g = perform(spec, g)
     marks = add_expression(arrangement(line), played, g)
-    assert [m.start for m in kinds(marks, "fermata")] == [360]
+    assert [m.start for m in kinds(marks, "fermata")] == [1440]
     texts = {m.value: m for m in kinds(marks, "text")}
-    assert "rit." in texts and 288 <= texts["rit."].start <= 336
+    assert "rit." in texts and 1152 <= texts["rit."].start <= 1344
     line, played, g = perform(spec)                       # steady: no rit.
     assert "rit." not in {m.value for m in kinds(add_expression(arrangement(line), played, g),
                                                          "text")}
@@ -158,8 +164,8 @@ def test_tempo_words_follow_the_metronome_table():
     assert tempo_word(50) == "Largo" and tempo_word(70) == "Adagio"
     assert tempo_word(90) == "Andante" and tempo_word(116) == "Allegretto"
     assert tempo_word(140) == "Allegro" and tempo_word(180) == "Presto"
-    assert felt_bpm(60, 18) == 120 and felt_bpm(150, 6) == 100 and felt_bpm(90, 12) == 90
-    spec = [(72 + i % 5, 12 * i, 12, 80) for i in range(8)]
+    assert felt_bpm(60, 72) == 120 and felt_bpm(150, 24) == 100 and felt_bpm(90, 48) == 90
+    spec = [(72 + i % 5, 48 * i, 48, 80) for i in range(8)]
     line, played, g = perform(spec)
     words = kinds(add_expression(arrangement(line, bpm=90), played, g), "text")
     assert words[0].start == 0 and words[0].value.split()[0] == "Andante"
@@ -172,10 +178,10 @@ def ornament_tune():
     """16 bars: every 2-bar phrase rises by a leap to a long peak and cadences 2-1."""
     spec = []
     for k in range(8):
-        s = 96 * k
-        spec += [(67, s, 12, 80), (72, s + 12, 6, 80), (74, s + 18, 6, 80),   # fast notes
-                 (79, s + 24, 24, 80),                                         # leap up to the peak
-                 (77, s + 48, 12, 80), (74, s + 60, 24, 80), (72, s + 84, 12, 80)]
+        s = 384 * k
+        spec += [(67, s, 48, 80), (72, s + 48, 24, 80), (74, s + 72, 24, 80),  # fast notes
+                 (79, s + 96, 96, 80),                                         # leap up to the peak
+                 (77, s + 192, 48, 80), (74, s + 240, 96, 80), (72, s + 336, 48, 80)]
     return perform(spec)
 
 
@@ -187,9 +193,9 @@ def test_ornaments_are_sparse_and_only_on_long_notes():
     assert orn
     assert len(orn) <= 16 / ORN_BARS
     starts = sorted(m.start for m in orn)
-    assert all(b - a >= ORN_BARS * 48 for a, b in zip(starts, starts[1:]))
+    assert all(b - a >= ORN_BARS * 192 for a, b in zip(starts, starts[1:]))
     dur = {q.start: q.dur for q in line}
-    assert all(dur[m.start] >= 12 for m in orn)                       # never on fast notes
+    assert all(dur[m.start] >= 48 for m in orn)                       # never on fast notes
     for m in kinds(marks, "grace"):
         assert int(m.value) == upper_neighbour(next(q.pitch for q in line if q.start == m.start), 0)
     assert not [m for m in add_expression(arr, played, g, "expressive")
@@ -197,11 +203,11 @@ def test_ornaments_are_sparse_and_only_on_long_notes():
 
 
 def test_cadence_trill_on_the_long_second_degree():
-    spec = [(76, 0, 12, 80), (79, 12, 12, 80), (77, 24, 12, 80), (76, 36, 12, 80),
-            (74, 48, 36, 80), (72, 84, 12, 80)]                       # ... D (long) - C: a 2-1 cadence
+    spec = [(76, 0, 48, 80), (79, 48, 48, 80), (77, 96, 48, 80), (76, 144, 48, 80),
+            (74, 192, 144, 80), (72, 336, 48, 80)]                    # ... D (long) - C: a 2-1 cadence
     line, played, g = perform(spec)
     marks = add_expression(arrangement(line), played, g, "ornaments")
-    assert [m.start for m in kinds(marks, "trill")] == [48]
+    assert [m.start for m in kinds(marks, "trill")] == [192]
 
 
 # ---------------------------------------------------------------- levels and sheet music input
@@ -215,16 +221,16 @@ def test_plain_adds_nothing():
 
 
 def test_score_marks_are_kept_and_not_doubled():
-    spec = [(72 + i % 5, 12 * i, 12, 80) for i in range(16)]
+    spec = [(72 + i % 5, 48 * i, 48, 80) for i in range(16)]
     line, played, g = perform(spec)
-    have = [Mark("dynamic", 0, value="f"), Mark("slur", 0, 36), Mark("staccato", 48),
+    have = [Mark("dynamic", 0, value="f"), Mark("slur", 0, 144), Mark("staccato", 192),
             Mark("text", 0, value="Allegro")]
     marks = add_expression(arrangement(line, expression=list(have)), played, g, "ornaments")
     assert marks[:len(have)] == have
     assert kinds(marks, "dynamic") == [have[0]]
     assert not kinds(marks, "cresc") and not kinds(marks, "dim")
-    assert not [m for m in kinds(marks, "slur")[1:] if m.start <= 36 and m.end >= 0]
-    assert [m for m in marks if m.start == 48 and m.kind in ("staccato", "tenuto", "accent")] \
+    assert not [m for m in kinds(marks, "slur")[1:] if m.start <= 144 and m.end >= 0]
+    assert [m for m in marks if m.start == 192 and m.kind in ("staccato", "tenuto", "accent")] \
         == [have[2]]
     assert kinds(marks, "text") == [have[3]]
 
@@ -233,14 +239,14 @@ def test_score_marks_are_kept_and_not_doubled():
 
 
 def marked_arrangement():
-    flute = [QNote(72 + i % 5, 12 * i, 12) for i in range(16)] + [QNote(74, 192, 24),
-                                                                   QNote(72, 216, 24)]
-    marks = [Mark("dynamic", 0, value="p"), Mark("cresc", 0, 36), Mark("dynamic", 48, value="f"),
-             Mark("slur", 0, 36), Mark("staccato", 48), Mark("staccato", 60),
-             Mark("accent", 72), Mark("tenuto", 84), Mark("dim", 96, 168),
-             Mark("mordent", 108), Mark("turn", 144), Mark("grace", 132, value="83"),
-             Mark("trill", 192), Mark("fermata", 216), Mark("text", 0, value="Andante dolce"),
-             Mark("text", 168, 240, "rit."), Mark("dynamic", 192, value="mp")]
+    flute = [QNote(72 + i % 5, 48 * i, 48) for i in range(16)] + [QNote(74, 768, 96),
+                                                                   QNote(72, 864, 96)]
+    marks = [Mark("dynamic", 0, value="p"), Mark("cresc", 0, 144), Mark("dynamic", 192, value="f"),
+             Mark("slur", 0, 144), Mark("staccato", 192), Mark("staccato", 240),
+             Mark("accent", 288), Mark("tenuto", 336), Mark("dim", 384, 672),
+             Mark("mordent", 432), Mark("turn", 576), Mark("grace", 528, value="83"),
+             Mark("trill", 768), Mark("fermata", 864), Mark("text", 0, value="Andante dolce"),
+             Mark("text", 672, 960, "rit."), Mark("dynamic", 768, value="mp")]
     return Arrangement(flute=flute, beats_per_bar=4, bpm=84, expression=marks)
 
 
@@ -295,10 +301,10 @@ def test_midi_plays_the_marks(tmp_path):
 
 
 def test_midi_velocity_follows_dynamics(tmp_path):
-    flute = [QNote(72 + i % 3, 12 * i, 12, 80) for i in range(16)]
+    flute = [QNote(72 + i % 3, 48 * i, 48, 80) for i in range(16)]
     arr = Arrangement(flute=flute, beats_per_bar=4, bpm=100, expression=[
-        Mark("dynamic", 0, value="pp"), Mark("dynamic", 48, value="mf"),
-        Mark("dynamic", 96, value="ff"), Mark("dynamic", 144, value="p")])
+        Mark("dynamic", 0, value="pp"), Mark("dynamic", 192, value="mf"),
+        Mark("dynamic", 384, value="ff"), Mark("dynamic", 576, value="p")])
     _, notes = flute_notes(write_outputs(arr, "Dyn", tmp_path)["midi"])
     v = [n.velocity for n in notes]
     assert v[0] < v[4] < v[8] and v[12] < v[8] and v[12] > v[0]
@@ -306,7 +312,7 @@ def test_midi_velocity_follows_dynamics(tmp_path):
 
 
 def test_no_marks_plays_as_before(tmp_path):
-    flute = [QNote(72, 0, 12, 70), QNote(74, 12, 12, 90)]
+    flute = [QNote(72, 0, 48, 70), QNote(74, 48, 48, 90)]
     _, notes = flute_notes(write_outputs(Arrangement(flute=flute, bpm=120), "Plain", tmp_path)["midi"])
     assert [(round(n.start, 3), round(n.end, 3)) for n in notes] == [(0.0, 0.5), (0.5, 1.0)]
     pm = pretty_midi.PrettyMIDI(str(tmp_path / "score.mid"))

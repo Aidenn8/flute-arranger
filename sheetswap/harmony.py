@@ -31,7 +31,7 @@ from math import ceil, floor, sqrt
 import numpy as np
 
 from .config import TICKS_PER_BEAT as T
-from .model import BeatGrid, Note, QNote
+from .model import SIXTEENTH, BeatGrid, Note, QNote
 
 # Krumhansl-Kessler key profiles; index 0 is the tonic.
 KK_MAJOR = (6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88)
@@ -289,7 +289,7 @@ def _lowest_line(rows, base: int, count: int, step: int) -> np.ndarray:
     return low
 
 
-def _unit_lowest(part, fallback, unit: int, k0: int, K: int, step: int = 3) -> np.ndarray:
+def _unit_lowest(part, fallback, unit: int, k0: int, K: int, step: int = SIXTEENTH) -> np.ndarray:
     """Per unit: ticks each pitch class is the lowest sounding note, weighted
     by register. `part` (a bass part) decides where it sounds, `fallback`
     (the accompaniment) elsewhere."""
@@ -319,10 +319,10 @@ def _unit_bass_note(part, fallback, unit: int, k0: int, K: int) -> np.ndarray:
     for src in (part, fallback):
         low = np.full(K, 999)
         for s, e, p, v in src:
-            if p >= 60 or v < 20 or e - s < 3:
+            if p >= 60 or v < 20 or e - s < SIXTEENTH:
                 continue
-            first = floor((s + 3) / unit)
-            last = min(floor((e - 3 - 1e-9) / unit), k0 + K - 1)  # held past a unit start + a 16th
+            first = floor((s + SIXTEENTH) / unit)
+            last = min(floor((e - SIXTEENTH - 1e-9) / unit), k0 + K - 1)  # held past a unit start + a 16th
             for k in range(max(first, k0), max(first, last) + 1):
                 if k - k0 < K:
                     low[k - k0] = min(low[k - k0], p)

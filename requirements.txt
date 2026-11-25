@@ -18,3 +18,11 @@ tinysoundfont  # install with --no-deps (pyaudio not needed)
 beat-this @ https://github.com/CPJKU/beat_this/archive/main.zip  # neural beat + downbeat tracker (approved 2026-11-24)
 oemer  # sheet-music reader (OMR) for screenshots; approved 2026-11-25
 opencv-python<4.11  # prebuilt for macOS 14 (5.x would compile from source)
+pandas  # imported by pm2s (below); installed 3.1.1
+# pm2s 1.1 (Performance MIDI-to-Score, github.com/cheriell/PM2S @ 9586f91, MIT; approved 2026-11-25)
+#   has no packaging upstream: scripts/install_pm2s.sh installs it into .venv and its
+#   checkpoints (Zenodo 10520196, ~390 MB) into models/pm2s/
+# Two stronger sheet-music readers live outside this environment (README "Setting it up"):
+#   homr==0.7.1 [cpu] in its own venv, tools/homr (its pins clash here: opencv-python-headless>=4.13, Pillow<13)
+#   Audiveris 5.11.0 (Java, bundles its runtime) in tools/audiveris: python -m sheetswap.omr --fetch-audiveris
+# oemer above stays as the last fallback; the order is sheetswap/omr.py DEFAULT_CHAIN.

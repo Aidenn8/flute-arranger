@@ -1,8 +1,8 @@
 """Reading sheet music from pictures (sheetswap.omr).
 
-The fast tests draw pages with OpenCV and stub out the OMR model; the one
-`slow` test engraves a melody, photographs it (Verovio SVG -> Quick Look PNG)
-and reads it back with the real model.
+The fast tests draw pages with OpenCV and stand in for the readers (homr,
+Audiveris, oemer); the `slow` tests engrave music, photograph it (Verovio SVG
+-> Quick Look PNG) and read it back with each reader that is installed.
 """
 import shutil
 import subprocess
@@ -19,8 +19,9 @@ SPACING = 12
 
 
 def drawn_page(width=1400, height=900, staves=3, spacing=SPACING, top=150, gap=180,
-               left=120, right=None):
-    """White page with five-line staves and a few noteheads, as grey uint8."""
+               left=120, right=None, system=1):
+    """White page with five-line staves and a few noteheads, as grey uint8; every
+    `system` staves joined at the left by a system bar line."""
     img = np.full((height, width), 255, np.uint8)
     right = right or width - 120
     for s in range(staves):
@@ -31,6 +32,10 @@ def drawn_page(width=1400, height=900, staves=3, spacing=SPACING, top=150, gap=1
             y = y0 + (k % 9) * spacing // 2
             cv2.ellipse(img, (x, y), (int(spacing * 0.65), int(spacing * 0.5)), -20, 0, 360, 0, -1)
             cv2.line(img, (x + int(spacing * 0.6), y), (x + int(spacing * 0.6), y - 3 * spacing), 0, 2)
+    for s in range(0, staves, system):
+        last = min(s + system, staves) - 1
+        if last > s:
+            cv2.line(img, (left, top + s * gap), (left, top + last * gap + 4 * spacing), 0, 3)
     return img
 
 
@@ -127,11 +132,12 @@ def test_wrong_file_type(tmp_path):
         omr.image_to_musicxml(p, tmp_path / "out")
 
 
-def _page_xml(path, pitches, staves=1, ks=0):
-    """A small one-page MusicXML like oemer writes (4/4, quarter notes)."""
+def _page_xml(path, pitches, staves=1, ks=0, parts_apart=False):
+    """A small one-page MusicXML like the readers write (4/4, quarter notes):
+    `staves` staves of one part (a piano), or with `parts_apart` that many parts."""
     parts = []
     for s in range(staves):
-        p = stream.PartStaff() if staves > 1 else stream.Part()
+        p = stream.PartStaff() if staves > 1 and not parts_apart else stream.Part()
         for b in range(0, len(pitches), 4):
             m = stream.Measure()
             if b == 0:
@@ -144,7 +150,7 @@ def _page_xml(path, pitches, staves=1, ks=0):
     sc = stream.Score()
     for p in parts:
         sc.insert(0, p)
-    if staves > 1:
+    if staves > 1 and not parts_apart:
         from music21 import layout
         sc.insert(0, layout.StaffGroup(parts, symbol="brace"))
     sc.write("musicxml", fp=str(path))
@@ -190,14 +196,38 @@ def test_oemer_wrapped_step_back_is_repaired(tmp_path):
 
 
 def _fake_oemer(monkeypatch, calls):
-    """Stub the model: each page 'reads' as four notes numbered by page."""
+    """Stub the model: each page 'reads' as four notes numbered by page; oemer is
+    the only reader."""
     def run(png, xml):
         calls.append(png.name)
         k = len(calls)
         _page_xml(xml, [60 + k, 62 + k, 64 + k, 65 + k])
         return xml
+    monkeypatch.setenv("SHEETSWAP_OMR", "oemer")
     monkeypatch.setattr(omr, "_run_oemer", run)
     monkeypatch.setattr(omr, "_ensure_models", lambda: None)
+
+
+def _fake_readers(monkeypatch, **readers):
+    """Every reader installed; each one given is stood in for by `fn(png, xml)` (None:
+    it fails), the others must not be called."""
+    calls = []
+
+    def make(name, fn):
+        def run(png, xml):
+            calls.append(name)
+            if fn is None:
+                raise RuntimeError(f"{name} lost track of a staff")
+            fn(png, xml)
+            return xml
+        return run
+
+    for name in omr.ENGINES:
+        monkeypatch.setattr(omr, f"_run_{name}", make(name, readers.get(name)))
+    monkeypatch.setattr(omr, "engine_available", lambda name: True)
+    monkeypatch.setattr(omr, "_ensure_models", lambda: None)
+    monkeypatch.delenv("SHEETSWAP_OMR", raising=False)
+    return calls
 
 
 def test_several_screenshots_become_one_score(tmp_path, monkeypatch):
@@ -339,14 +369,152 @@ def test_repair_leaves_a_right_score_alone(tmp_path):
     assert all(b == [(f"{s}5", float(i), 1.0) for i, s in enumerate("CDEF")] for b in _bars(xml))
 
 
+def test_repair_trusts_a_time_signature_read_off_the_page(tmp_path):
+    """Bars of four quarters fit 4/4 and 2/2 alike: a 2/2 oemer never read (it
+    writes none, join_musicxml guesses) goes to 4/4, a 2/2 Audiveris or homr read
+    on the page stays."""
+    plain = "".join(_o_note(s, 5, 16, "quarter") for s in "CDEF")
+    guessed = _o_score(tmp_path / "guess.musicxml", [plain] * 4, beats=2, beat_type=2)
+    assert omr.repair_rhythm(guessed)["meter"] == "4/4"
+    read = _o_score(tmp_path / "read.musicxml", [plain] * 4, beats=2, beat_type=2)
+    read.write_text(read.read_text().replace(
+        "<part-list>", "<identification><encoding><software>sheetswap.omr: audiveris"
+                       "</software></encoding></identification><part-list>"))
+    assert omr.repair_rhythm(read)["meter"] == "2/2"
+
+
+def test_repair_every_part_and_each_pages_divisions(tmp_path):
+    """A quartet's second part has an overfull bar (an 8th rest read as a quarter
+    rest); page 2 counts 12 divisions a quarter where page 1 counted 16."""
+    def part(pid, bars):
+        return f'<part id="{pid}">' + "".join(
+            f'<measure number="{k + 1}">'
+            + ('<attributes><divisions>16</divisions><time><beats>4</beats><beat-type>4</beat-type>'
+               '</time><clef><sign>G</sign><line>2</line></clef></attributes>' if k == 0 else "")
+            + ('<attributes><divisions>12</divisions></attributes>' if k == 2 else "")
+            + b + "</measure>" for k, b in enumerate(bars)) + "</part>"
+    q16 = "".join(_o_note(s, 5, 16, "quarter") for s in "CDEF")
+    q12 = "".join(_o_note(s, 5, 12, "quarter") for s in "CDEF")
+    over = (_o_note("C", 4, 16, "quarter") + _o_rest(16) + _o_note("D", 4, 8, "eighth")
+            + "".join(_o_note(s, 4, 16, "quarter") for s in "EF"))
+    xml = tmp_path / "q.musicxml"
+    xml.write_text('<?xml version="1.0" encoding="UTF-8"?><score-partwise><part-list>'
+                   '<score-part id="P1"><part-name>Violin</part-name></score-part>'
+                   '<score-part id="P2"><part-name>Viola</part-name></score-part></part-list>'
+                   + part("P1", [q16, q16, q12, q12]) + part("P2", [q16, over, q12, q12])
+                   + "</score-partwise>")
+    done = omr.repair_rhythm(xml)
+    assert done["meter"] == "4/4" and done["fixed"] == 1 and done["padded"] == done["left"] == 0
+    for p in (0, 1):
+        assert all(sum(q for _, _, q in b) == 4.0 for b in _bars(xml, p))
+    assert _bars(xml, 0)[3] == [(f"{s}5", float(i), 1.0) for i, s in enumerate("CDEF")]
+    assert [n for n, _, _ in _bars(xml, 1)[1]] == ["C4", "r", "D4", "E4", "F4"]
+
+
 def test_name_option_and_model_failure(tmp_path, monkeypatch):
-    def broken(png, xml):
-        raise IndexError("oemer lost track of a staff")
-    monkeypatch.setattr(omr, "_run_oemer", broken)
-    monkeypatch.setattr(omr, "_ensure_models", lambda: None)
+    calls = _fake_readers(monkeypatch)                  # every reader fails
     with pytest.raises(ValueError, match="Couldn't read any music"):
         omr.image_to_musicxml(save(drawn_page(), tmp_path / "p.png"), tmp_path / "x",
                               name="input.musicxml")
+    assert calls == ["homr", "audiveris", "oemer"]      # each one tried, best first
+
+
+# --------------------------------------------------------------------------- choosing a reader
+# "you can do all 4 steps": step 3, a stronger reader. homr first, Audiveris next (it
+# also reads choirs and quartets), oemer last; the next one takes over when one fails.
+
+
+def test_chain_order_env_and_unknown_reader(monkeypatch):
+    monkeypatch.setattr(omr, "engine_available", lambda name: name != "audiveris")
+    monkeypatch.delenv("SHEETSWAP_OMR", raising=False)
+    assert omr.chain() == ["homr", "oemer"]             # not installed: left out
+    assert omr.chain("audiveris,oemer") == ["oemer"]
+    monkeypatch.setenv("SHEETSWAP_OMR", "oemer,homr")
+    assert omr.chain() == ["oemer", "homr"]
+    with pytest.raises(ValueError, match="Unknown sheet-music reader"):
+        omr.chain("photoscore")
+
+
+def test_no_reader_installed_is_a_plain_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(omr, "engine_available", lambda name: False)
+    with pytest.raises(RuntimeError, match="fetch-audiveris"):
+        omr.image_to_musicxml(save(drawn_page(), tmp_path / "p.png"), tmp_path / "x")
+
+
+def test_next_reader_takes_over_when_one_fails(tmp_path, monkeypatch):
+    calls = _fake_readers(monkeypatch, audiveris=lambda png, xml: _page_xml(xml, [72, 74, 76, 77]))
+    out = omr.image_to_musicxml(save(drawn_page(), tmp_path / "p.png"), tmp_path / "x")
+    assert calls == ["homr", "audiveris"]               # homr failed, oemer never needed
+    sc = converter.parse(str(out))
+    assert [n.pitch.midi for n in sc.recurse().notes] == [72, 74, 76, 77]
+    assert "audiveris" in out.read_text()               # <software> names the reader
+
+
+def test_a_reading_missing_staves_goes_to_the_next_reader(tmp_path, monkeypatch):
+    """A choir page (four staves a system): homr reading only one staff a system is
+    passed over for a reader that finds all four parts."""
+    page = save(drawn_page(height=1300, staves=8, gap=140, system=4), tmp_path / "choir.png")
+    calls = _fake_readers(monkeypatch,
+                          homr=lambda png, xml: _page_xml(xml, [60, 62, 64, 65] * 4),
+                          audiveris=lambda png, xml: _page_xml(xml, [72, 74, 76, 77], staves=4,
+                                                               parts_apart=True))
+    out = omr.image_to_musicxml(page, tmp_path / "x")
+    assert calls == ["homr", "audiveris"]
+    assert len(converter.parse(str(out)).parts) == 4
+    # no reader does better: the short reading is kept rather than nothing
+    calls = _fake_readers(monkeypatch, homr=lambda png, xml: _page_xml(xml, [60, 62, 64, 65]))
+    out = omr.image_to_musicxml(page, tmp_path / "y")
+    assert calls == ["homr", "audiveris", "oemer"]
+    assert [n.pitch.midi for n in converter.parse(str(out)).recurse().notes] == [60, 62, 64, 65]
+
+
+def test_system_sizes_from_the_opening_bar_lines():
+    piano = drawn_page(height=1300, staves=6, gap=150, system=2)
+    info = omr.prepare(piano)
+    assert info["staves"] == 6 and info["systems"] == [2, 2, 2]
+    choir = drawn_page(height=1300, staves=8, gap=140, system=4)
+    assert omr.prepare(choir)["systems"] == [4, 4]
+    assert omr.prepare(drawn_page())["systems"] == [1, 1, 1]      # a melody: no joins
+
+
+def test_staves_tilted_their_own_way_are_all_kept():
+    """A photo taken at an angle: after straightening, the staves still lean
+    differently (perspective), but every one stays inside the crop."""
+    page = drawn_page(width=1600, height=1500, staves=6, gap=200, left=150)
+    src = np.float32([[0, 0], [1600, 0], [1600, 1500], [0, 1500]])
+    dst = np.float32([[60, 0], [1540, 70], [1600, 1440], [0, 1500]])
+    photo = cv2.warpPerspective(page, cv2.getPerspectiveTransform(src, dst), (1600, 1500),
+                                borderValue=255)
+    gray = omr.rotate(photo, omr.deskew_angle(omr._binarize(photo)))
+    found = omr.find_staves(gray, SPACING)
+    every = omr.find_tilted_staves(gray, SPACING, found)
+    assert len(every) == 6 and len(every) > len(found)
+
+
+def test_unzip_compressed_musicxml(tmp_path):
+    import zipfile
+    xml = _page_xml(tmp_path / "s.musicxml", [60, 62, 64, 65])
+    mxl = tmp_path / "s.mxl"
+    with zipfile.ZipFile(mxl, "w") as z:
+        z.writestr("META-INF/container.xml",
+                   '<container><rootfiles><rootfile full-path="score.xml"/></rootfiles></container>')
+        z.writestr("score.xml", xml.read_text())
+    out = omr.unzip_mxl(mxl, tmp_path / "out.musicxml")
+    assert [n.pitch.midi for n in converter.parse(str(out)).recurse().notes] == [60, 62, 64, 65]
+
+
+def test_join_keeps_every_part_of_a_quartet(tmp_path):
+    a = _page_xml(tmp_path / "a.musicxml", [72, 74, 76, 77, 79, 81, 83, 84], staves=4, parts_apart=True)
+    b = _page_xml(tmp_path / "b.musicxml", [84, 83, 81, 79], staves=2, parts_apart=True)
+    out = omr.join_musicxml([a, b], tmp_path / "q.musicxml", engines=["audiveris"])
+    sc = converter.parse(str(out))
+    assert len(sc.parts) == 4
+    first = [n.pitch.midi for n in sc.parts[0].recurse().notes]
+    assert first == [72, 74, 76, 77, 79, 81, 83, 84, 84, 83, 81, 79]
+    for p in sc.parts:
+        assert [m.number for m in p.getElementsByClass(stream.Measure)] == [1, 2, 3]
+    viola = sc.parts[2].getElementsByClass(stream.Measure)          # not on page 2: rests
+    assert not list(viola[2].recurse().notes) and viola[2].duration.quarterLength == 4
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="PDF pages are drawn with macOS PDFKit")
@@ -429,9 +597,12 @@ def _pitch_accuracy(truth, got):
 
 @pytest.mark.slow
 @pytest.mark.skipif(shutil.which("qlmanage") is None, reason="needs macOS Quick Look")
-def test_reads_an_engraved_melody(tmp_path):
+@pytest.mark.parametrize("engine", [None, *omr.ENGINES])
+def test_reads_an_engraved_melody(tmp_path, engine):
+    if engine and not omr.engine_available(engine):
+        pytest.skip(f"{engine} isn't installed")
     png = _engrave(tmp_path)
-    out = omr.image_to_musicxml(png, tmp_path / "song")
+    out = omr.image_to_musicxml(png, tmp_path / "song", engine=engine)
     sc = converter.parse(str(out))
     got = []
     for n in sc.parts[0].recurse().notes:
@@ -440,3 +611,33 @@ def test_reads_an_engraved_melody(tmp_path):
     assert acc >= MIN_PITCH_ACC, f"pitch accuracy {acc:.2f}"
     ks = sc.recurse().getElementsByClass(key.KeySignature)
     assert ks and ks[0].sharps == 1
+    if engine in omr.READS_METER:                       # read off the page, not guessed
+        ts = sc.recurse().getElementsByClass(meter.TimeSignature)
+        assert ts and ts[0].ratioString == "4/4"
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(shutil.which("qlmanage") is None, reason="needs macOS Quick Look")
+def test_reads_a_four_part_chorale(tmp_path):
+    """More than two staves a system (a choir): every part comes back, soprano on top."""
+    if not omr.engine_available("audiveris"):
+        pytest.skip("Audiveris isn't installed")
+    from music21 import corpus
+    from sheetswap.render import render_svg
+    xml = tmp_path / "chorale.musicxml"
+    corpus.parse("bach/bwv66.6").measures(1, 8).write("musicxml", fp=str(xml))
+    svg = render_svg(xml)[0]
+    import re
+    m = re.match(r'<svg width="(\d+)px" height="(\d+)px"', svg)
+    w, h = int(m.group(1)), int(m.group(2))
+    svg = svg.replace(m.group(0), f'<svg width="700px" height="{round(700 * h / w)}px" '
+                                  f'viewBox="0 0 {w} {h}"', 1)
+    (tmp_path / "chorale.svg").write_text(svg)
+    subprocess.run(["qlmanage", "-t", "-s", "2000", "-o", str(tmp_path), str(tmp_path / "chorale.svg")],
+                   check=True, capture_output=True, timeout=60)
+    out = omr.image_to_musicxml(tmp_path / "chorale.svg.png", tmp_path / "song")
+    sc = converter.parse(str(out))
+    assert len(sc.parts) == 4
+    truth = [n.pitch.midi for n in converter.parse(str(xml)).parts[0].recurse().notes]
+    got = [max(p.midi for p in n.pitches) for n in sc.parts[0].recurse().notes]
+    assert _pitch_accuracy(truth, got) >= MIN_PITCH_ACC

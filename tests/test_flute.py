@@ -5,7 +5,7 @@ from sheetswap.flute import easy_key_shift, fit_to_flute, key_after_shift
 from sheetswap.model import QNote
 
 
-def _line(pitches, dur=12, gap=0, start=0):
+def _line(pitches, dur=48, gap=0, start=0):
     out, t = [], start
     for p in pitches:
         out.append(QNote(p, t, dur))
@@ -30,7 +30,7 @@ def test_fit_all_in_hard_range():
     rng = random.Random(3)
     for _ in range(20):
         line = _line([rng.randint(20, 110) for _ in range(60)],
-                     dur=rng.choice([3, 6, 12]), gap=rng.choice([0, 6, 12, 24]))
+                     dur=rng.choice([12, 24, 48]), gap=rng.choice([0, 24, 48, 96]))
         before = [(n.pitch, n.start, n.dur) for n in line]
         for octave in (-1, 0, 1):
             out, shift = fit_to_flute(line, octave)
@@ -44,7 +44,7 @@ def test_fit_all_in_hard_range():
 def test_fold_moves_whole_phrase():
     low = [60, 62, 64, 65, 67, 69, 71, 72, 71, 69, 67, 65, 64, 62, 60]
     high = [86, 89, 91, 93, 96, 98, 96, 93]          # one note above C7
-    line = _line(low) + _line(high, start=len(low) * 12 + 24)   # two-beat rest between
+    line = _line(low) + _line(high, start=len(low) * 48 + 96)   # two-beat rest between
     out, shift = fit_to_flute(line)
     assert shift == 0
     assert _inside(out)
@@ -74,10 +74,10 @@ def test_octave_override():
 
 
 def test_fit_keeps_other_fields():
-    line = [QNote(48, -6, 6, 70), QNote(50, 0, 12, 99, True)]
+    line = [QNote(48, -24, 24, 70), QNote(50, 0, 48, 99, True)]
     out, shift = fit_to_flute(line)
     assert [(n.start, n.dur, n.velocity, n.breath_after) for n in out] == \
-           [(-6, 6, 70, False), (0, 12, 99, True)]
+           [(-24, 24, 70, False), (0, 48, 99, True)]
     assert fit_to_flute([]) == ([], 0)
 
 
@@ -107,7 +107,7 @@ def test_key_after_shift():
 
 def test_octave_slip_is_fixed_but_real_leaps_stay():
     def line(pitches):
-        return [QNote(p, 12 * i, 12) for i, p in enumerate(pitches)]
+        return [QNote(p, 48 * i, 48) for i, p in enumerate(pitches)]
     out, _ = fit_to_flute(line([76, 77, 64, 76, 74]))        # E5 F5 E4 E5 D5: E4 is a slip
     assert [n.pitch for n in out] == [76, 77, 76, 76, 74]
     out, _ = fit_to_flute(line([72, 84, 83, 79, 77]))        # C5 C6 B5: a real octave leap
@@ -118,7 +118,7 @@ def test_octave_slip_is_fixed_but_real_leaps_stay():
 
 def test_phrase_edge_slips_fixed_but_octave_leap_kept():
     def line(pitches):
-        return [QNote(p, 12 * i, 12) for i, p in enumerate(pitches)]
+        return [QNote(p, 48 * i, 48) for i, p in enumerate(pitches)]
     out, _ = fit_to_flute(line([95, 80, 81, 83, 81]))     # B6 then G#5...: B6 is a slip
     first, second = out[0].pitch, out[1].pitch
     assert first % 12 == 95 % 12 and abs(first - second) <= 12   # B, now near the G#
@@ -132,10 +132,10 @@ def test_phrase_edge_slips_fixed_but_octave_leap_kept():
 
 def test_phrase_in_the_weak_low_register_moves_up_whole():
     from sheetswap.flute import phrase_octaves
-    high = _line([72, 74, 76, 77, 79, 77, 76, 74], dur=12)                 # C5-G5: fine
-    low = _line([60, 62, 64, 65, 64, 62, 60, 62] * 2, dur=12, start=144)    # C4-F4, two bars
-    end = _line([76, 74, 72, 74, 76, 79, 77, 76], dur=12, start=384)
-    out, moved = phrase_octaves(high + low + end, [], 12, 48)
+    high = _line([72, 74, 76, 77, 79, 77, 76, 74], dur=48)                 # C5-G5: fine
+    low = _line([60, 62, 64, 65, 64, 62, 60, 62] * 2, dur=48, start=576)    # C4-F4, two bars
+    end = _line([76, 74, 72, 74, 76, 79, 77, 76], dur=48, start=1536)
+    out, moved = phrase_octaves(high + low + end, [], 48, 192)
     assert moved == 1
     assert [n.pitch for n in out[:8]] == [n.pitch for n in high]
     assert [n.pitch for n in out[8:24]] == [n.pitch + 12 for n in low]     # whole phrase, intervals kept
@@ -144,13 +144,13 @@ def test_phrase_in_the_weak_low_register_moves_up_whole():
 
 def test_short_low_dip_stays_but_a_loud_one_moves():
     from sheetswap.flute import phrase_octaves
-    tune = _line([74, 76, 77, 79], start=0) + _line([67, 69, 67, 69], start=60) \
-        + _line([79, 77, 76, 74], start=120)
-    out, moved = phrase_octaves(tune, [], 12, 48)
+    tune = _line([74, 76, 77, 79], start=0) + _line([67, 69, 67, 69], start=240) \
+        + _line([79, 77, 76, 74], start=480)
+    out, moved = phrase_octaves(tune, [], 48, 192)
     assert moved == 0                                     # G4-A4 for a bar: not worth an octave jump
     low = _line([62, 64, 65, 64, 62, 64, 65, 67], start=0)                  # D4-G4, two bars
-    _, quiet = phrase_octaves(low, [(0, "p")], 12, 48)
-    out, loud = phrase_octaves(low, [(0, "ff")], 12, 48)
+    _, quiet = phrase_octaves(low, [(0, "p")], 48, 192)
+    out, loud = phrase_octaves(low, [(0, "ff")], 48, 192)
     assert loud == 1 and out[0].pitch == 74               # ff below G4 is hardly possible (R-FLUTE-2)
     assert quiet in (0, 1)
 
@@ -158,16 +158,16 @@ def test_short_low_dip_stays_but_a_loud_one_moves():
 def test_phrase_that_would_leave_the_range_stays():
     from sheetswap.flute import phrase_octaves
     line = _line([60, 62, 64, 86, 88, 89], start=0)       # C4 ... F6: up an octave is past C7
-    out, moved = phrase_octaves(line, [], 12, 48)
+    out, moved = phrase_octaves(line, [], 48, 192)
     assert moved == 0 and [n.pitch for n in out] == [n.pitch for n in line]
 
 
 def test_fast_wide_leaps_become_a_playable_outline():
     from sheetswap.flute import outline_leaps
-    run = _line([72, 91, 76, 72, 93, 88], dur=3)          # 16ths leaping a 12th and more
-    out, moved = outline_leaps(run, 6)
+    run = _line([72, 91, 76, 72, 93, 88], dur=12)         # 16ths leaping a 12th and more
+    out, moved = outline_leaps(run, 24)
     assert moved == 2
     assert [n.pitch % 12 for n in out] == [p % 12 for p in [72, 91, 76, 72, 93, 88]]
     assert all(abs(b.pitch - a.pitch) <= 12 for a, b in zip(out, out[1:]))
-    slow = _line([72, 91, 76], dur=12)                    # quarters: a leap a flutist can take
-    assert outline_leaps(slow, 6) == (slow, 0)
+    slow = _line([72, 91, 76], dur=48)                    # quarters: a leap a flutist can take
+    assert outline_leaps(slow, 24) == (slow, 0)

@@ -103,7 +103,7 @@ def test_easy_key_and_octave_options(tmp_path):
     three = pipeline.arrange(an, ArrangeOptions(meter="3/4"))
     assert three.beats_per_bar == 3 and base.beats_per_bar == 4
     shifted = pipeline.arrange(an, ArrangeOptions(barshift=1))
-    assert [q.start for q in shifted.flute] == [q.start - 12 for q in base.flute]
+    assert [q.start for q in shifted.flute] == [q.start - 48 for q in base.flute]
 
 
 def _analysis(sources, duration=8.0):
@@ -135,10 +135,10 @@ def test_bar_shift_keeps_pickup_under_a_bar():
     for shift in range(4):
         arr = pipeline.arrange(an, ArrangeOptions(barshift=shift))
         first = min(q.start for q in arr.flute)
-        assert -48 < first <= 0, (shift, first)          # never a whole empty bar
+        assert -192 < first <= 0, (shift, first)         # never a whole empty bar
     starts = {s: min(q.start for q in pipeline.arrange(an, ArrangeOptions(barshift=s)).flute)
               for s in range(4)}
-    assert starts == {0: -36, 1: 0, 2: -12, 3: -24}
+    assert starts == {0: -144, 1: 0, 2: -48, 3: -96}
 
 
 def test_pick_melody_prefers_singing():
@@ -242,18 +242,18 @@ def test_six_eight_midi_end_to_end(tmp_path):
     from music21 import converter, stream
     d = _midi_song(tmp_path, JIG, 6, 8, quarter_bpm=150)      # dotted quarter = 100
     an = pipeline.analyze(d)
-    assert (an.grid.beats_per_bar, an.grid.beat_ticks) == (2, 18)
+    assert (an.grid.beats_per_bar, an.grid.beat_ticks) == (2, 72)
     for mode in ("solo", "duet"):
         res = pipeline.arrange_and_render(d, ArrangeOptions(mode=mode))
         arr = res["arr"]
         assert arr.time_signature == (6, 8) and arr.bpm == 100
         assert res["warnings"] == []
         assert res["svgs"] and "<svg" in res["svgs"][0]
-        # one 8th = 6 ticks, written exactly as the file has it
-        starts, t = [], -6
+        # one 8th = 24 ticks, written exactly as the file has it
+        starts, t = [], -24
         for _, n in JIG:
             starts.append(t)
-            t += 6 * n
+            t += 24 * n
         assert [q.start for q in arr.flute] == starts
         xml = res["musicxml"].read_text()
         assert "<beats>6</beats>" in xml and "<beat-type>8</beat-type>" in xml
@@ -280,14 +280,14 @@ def test_three_eight_midi_uses_eighth_beats(tmp_path):
                         (76, 1)] * 3
     d = _midi_song(tmp_path, tune, 3, 8, quarter_bpm=72, name="elise")   # 8th = 144
     an = pipeline.analyze(d)
-    assert (an.grid.beats_per_bar, an.grid.beat_ticks) == (3, 6)
+    assert (an.grid.beats_per_bar, an.grid.beat_ticks) == (3, 24)
     res = pipeline.arrange_and_render(d, ArrangeOptions())
     arr = res["arr"]
     assert arr.time_signature == (3, 8) and arr.bpm == 144
     xml = res["musicxml"].read_text()
     assert "<beats>3</beats>" in xml and "<beat-type>8</beat-type>" in xml
     assert "<beat-unit>eighth</beat-unit>" in xml
-    assert all(q.start % 6 == 0 for q in arr.flute)
+    assert all(q.start % 24 == 0 for q in arr.flute)
     # asked for 6/8 instead: the same music in bars twice as long
     six = pipeline.arrange(an, ArrangeOptions(meter="6/8"))
     assert six.time_signature == (6, 8) and six.bpm == 48
@@ -297,18 +297,18 @@ def test_three_eight_midi_uses_eighth_beats(tmp_path):
 def test_meter_choice_reads_the_same_beats():
     g = BeatGrid([i * 0.5 for i in range(24)], 4, 0)                 # quarter beats
     six = pipeline.apply_meter(g, "6/8", [], detect=False)
-    assert (six.beats_per_bar, six.beat_ticks, six.beats) == (2, 18, g.beats)
+    assert (six.beats_per_bar, six.beat_ticks, six.beats) == (2, 72, g.beats)
     assert (pipeline.apply_meter(g, "3/8", [], False).beat_ticks,
-            pipeline.apply_meter(g, "3/8", [], False).beats_per_bar) == (6, 3)
+            pipeline.apply_meter(g, "3/8", [], False).beats_per_bar) == (24, 3)
     assert pipeline.apply_meter(g, "2/4", [], False).beats_per_bar == 2
     assert pipeline.apply_meter(g, "auto", [], False) is g          # a MIDI file's own meter
-    dotted = BeatGrid(g.beats, 4, 0, 18)
-    assert pipeline.apply_meter(dotted, "3/4", [], False).beat_ticks == 12
+    dotted = BeatGrid(g.beats, 4, 0, 72)
+    assert pipeline.apply_meter(dotted, "3/4", [], False).beat_ticks == 48
     one = pipeline.apply_meter(dotted, "3/8", [], False)             # a dotted beat a bar
-    assert (one.beats_per_bar, one.beat_ticks) == (1, 18)
-    eighths = BeatGrid(g.beats, 3, 4, 6)                             # 3/8, bar 1 at beat 4
+    assert (one.beats_per_bar, one.beat_ticks) == (1, 72)
+    eighths = BeatGrid(g.beats, 3, 4, 24)                            # 3/8, bar 1 at beat 4
     joined = pipeline.apply_meter(eighths, "6/8", [], False)
-    assert (joined.beats_per_bar, joined.beat_ticks) == (2, 18)
+    assert (joined.beats_per_bar, joined.beat_ticks) == (2, 72)
     assert joined.beats == g.beats[1::3] and joined.to_seconds(0) == eighths.to_seconds(0)
     assert abs(joined.bpm() - eighths.bpm() / 3) < 1e-6
 
@@ -323,17 +323,17 @@ def test_auto_meter_hears_compound_audio():
             tune.append(Note(72 + (i + int(3 * f)) % 7, (i + f) * beat, (i + f) * beat + 0.18, 90))
     an = Analysis("x", "piano", 20.0, BeatGrid([i * beat for i in range(36)], 4, 0), {"piano": tune})
     arr = pipeline.arrange(an, ArrangeOptions())
-    assert arr.beat_ticks == 18 and arr.time_signature == (12, 8)
-    assert all(q.start % 6 == 0 for q in arr.flute)                  # plain 8ths, no triplets
+    assert arr.beat_ticks == 72 and arr.time_signature == (12, 8)
+    assert all(q.start % 24 == 0 for q in arr.flute)                 # plain 8ths, no triplets
     four = pipeline.arrange(an, ArrangeOptions(meter="4/4"))         # the user knows better
-    assert four.beat_ticks == 12 and any(q.start % 4 == 0 and q.start % 3 for q in four.flute)
+    assert four.beat_ticks == 48 and any(q.start % 16 == 0 and q.start % 12 for q in four.flute)
 
 
 def test_meter_six_eight_on_a_four_four_file(tmp_path):
     an = pipeline.analyze(_song(tmp_path))
     six = pipeline.arrange(an, ArrangeOptions(meter="6/8"))
     assert six.time_signature == (6, 8)
-    assert [q.dur for q in six.flute][:4] == [18] * 4                # each beat a dotted quarter
+    assert [q.dur for q in six.flute][:4] == [72] * 4                # each beat a dotted quarter
 
 
 def test_find_beats_falls_back_when_the_network_fails(tmp_path, monkeypatch):

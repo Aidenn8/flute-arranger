@@ -81,7 +81,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .model import DOTTED_BEAT, EIGHTH_BEAT, Arrangement, BeatGrid, Mark, Note, QNote
+from .model import (DOTTED_BEAT, EIGHTH_BEAT, QUARTER_BEAT, SIXTEENTH, Arrangement, BeatGrid, Mark,
+                    Note, QNote)
 
 LEVELS = ("plain", "expressive", "ornaments")
 DYNAMICS = ("pp", "p", "mp", "mf", "f", "ff")
@@ -90,7 +91,7 @@ ARTICULATIONS = ("staccato", "tenuto", "accent")
 ORNAMENTS = ("trill", "mordent", "turn", "grace")
 TEMPO_CHANGES = ("rit.", "a tempo")
 
-MATCH_TOL = 3        # ticks: a flute note is the performed note starting within a 16th of it
+MATCH_TOL = SIXTEENTH  # ticks: a flute note is the performed note starting within a 16th of it
 STEP = 8.0           # velocity per dynamic level
 HYSTERESIS = 0.3     # of a level, past the boundary, before the dynamic changes
 MIN_DYN_GAP = 2      # bars between two dynamic marks at least
@@ -203,7 +204,7 @@ def _base_level(felt: float) -> int:
 def _unit(arr: Arrangement) -> int:
     """A bar as phrasing counts it: short bars (2/4, 3/8: under three quarter
     beats or two dotted ones) count in pairs, as breath marks do."""
-    return arr.bar_ticks * (1 if arr.bar_ticks >= 3 * 12 else 2)
+    return arr.bar_ticks * (1 if arr.bar_ticks >= 3 * QUARTER_BEAT else 2)
 
 
 def _strong(tick: int, arr: Arrangement) -> bool:
@@ -395,6 +396,8 @@ def _slurs(line, pl, arr, stacc: set[int]) -> list[Mark]:
             return
         if line[run[-1]].start - line[run[0]].start <= SLUR_BARS * bar:
             out.append(Mark("slur", line[run[0]].start, line[run[-1]].start))
+            return
+        if len(run) == 2:                       # two notes further apart than a slur reaches
             return
         best, score = None, -math.inf
         for k in range(1, len(run) - 2):        # end the first slur on run[k]

@@ -33,14 +33,17 @@ from pathlib import Path
 
 from .checks import bar_ticks, lead_in_ticks, pickup_start, printed_bar
 from .config import FLUTE_HARD, TICKS_PER_BEAT as T
-from .model import QUARTER_BEAT, Arrangement, Mark, QNote
+from .model import (DOTTED_BEAT, QUARTER_BEAT, SIXTEENTH, THIRTY_SECOND, TRIPLET_8TH, TRIPLET_16TH,
+                    Arrangement, Mark, QNote)
 
 ERROR, ADVICE, FIXED = "error", "advice", "fixed"   # Issue levels ("fixed": what tidy did)
 
 BREATH_LIMIT = 10.0   # s of continuous playing a flutist can manage (R-BREATH-2)
 BREATH_AIM = 8.0      # s: where tidy aims to put a missing breath ...
 BREATH_SOONEST = 4.0  # s: ... and never sooner than this after the last one
-GAP = 6               # ticks: a rest of an 8th or more is a place to breathe (R-BREATH-5)
+E8, S16, S32 = T // 2, SIXTEENTH, THIRTY_SECOND   # an 8th, 16th, 32nd (ticks)
+R8, R16 = TRIPLET_8TH, TRIPLET_16TH              # an 8th and a 16th triplet
+GAP = E8              # ticks: a rest of an 8th or more is a place to breathe (R-BREATH-5)
 GAP_SECONDS = 0.35    # ... and so is any rest at least this long
 HIGH = 93             # A6: soft playing gets hard, 8va territory (R-FLUTE-1, R-RANGE-3)
 LOW = 67              # G4: below it the flute is weak (R-FLUTE-1)
@@ -64,7 +67,7 @@ class Issue:
 def _unit(arr: Arrangement) -> int:
     """The beat as the page shows it: a quarter, or a dotted quarter (6/8, 9/8,
     12/8 and 3/8, which is one dotted beat a bar however it is counted)."""
-    return QUARTER_BEAT if arr.beat_ticks == QUARTER_BEAT else 18
+    return QUARTER_BEAT if arr.beat_ticks == QUARTER_BEAT else DOTTED_BEAT
 
 
 def _seconds_per_tick(arr: Arrangement) -> float:
@@ -72,14 +75,31 @@ def _seconds_per_tick(arr: Arrangement) -> float:
     return 60.0 / bpm / arr.beat_ticks
 
 
-SIMPLE_VALUES = {3, 6, 9, 12, 18, 24, 36, 48}       # 16th ... whole, dotted values
-COMPOUND_VALUES = {3, 6, 9, 12, 18, 36, 72}         # no half or whole notes in 6/8-12/8
-TRIPLET_VALUES = {4, 8}
+DOTTED = 3 * T // 2
+# 32nd, dotted 16th, 16th ... whole, dotted values
+SIMPLE_VALUES = {S32, 3 * S32, S16, E8, 3 * S16, T, DOTTED, 2 * T, 3 * T, 4 * T}
+# no half or whole notes in 6/8-12/8
+COMPOUND_VALUES = {S32, 3 * S32, S16, E8, 3 * S16, T, DOTTED_BEAT, 2 * DOTTED_BEAT, 4 * DOTTED_BEAT}
+TRIPLET_VALUES = {R16, R8, 2 * R8}
 # inside a dotted-quarter beat: offset -> lengths that may start there (R-METER-7)
-IN_DOTTED_BEAT = {0: (18, 12, 9, 6, 3), 3: (9, 6, 3), 6: (12, 6, 3), 9: (9, 6, 3),
-                  12: (6, 3), 15: (3,)}
+IN_DOTTED_BEAT = {0: (DOTTED, T, 3 * S16, E8, S16), S16: (3 * S16, E8, S16),
+                  2 * S16: (T, E8, S16), 3 * S16: (3 * S16, E8, S16),
+                  4 * S16: (E8, S16), 5 * S16: (S16,)}
 # inside a quarter beat: length -> offsets it may start on (R-METER-5)
-IN_QUARTER_BEAT = {12: (0,), 9: (0, 3), 6: (0, 3, 6), 3: (0, 3, 6, 9), 8: (0, 4), 4: (0, 4, 8)}
+IN_QUARTER_BEAT = {T: (0,), 3 * S16: (0, S16), E8: (0, S16, E8), S16: (0, S16, E8, 3 * S16),
+                   2 * R8: (0, R8), R8: (0, R8, 2 * R8), R16: tuple(range(0, T, R16))}
+# inside an 8th: length -> offsets it may start on (32nds, R-METER-5 one level down)
+IN_EIGHTH = {3 * S32: (0, S32), S16: (0, S32, S16), S32: (0, S32, S16, 3 * S32)}
+
+
+def _in_beat_ok(off: int, dur: int, quarter: bool) -> bool:
+    """May a value of `dur` start `off` ticks into a beat (and end inside it)?"""
+    table = IN_QUARTER_BEAT if quarter else IN_DOTTED_BEAT
+    if quarter:
+        ok = off in table.get(dur, ())
+    else:
+        ok = dur in table.get(off, ())
+    return ok or off % E8 in IN_EIGHTH.get(dur, ())
 
 
 def note_rule(pos: int, dur: int, bpb: int, unit: int) -> str | None:
@@ -94,26 +114,26 @@ def note_rule(pos: int, dur: int, bpb: int, unit: int) -> str | None:
             return "R-METER-10"
         off = pos % unit
         if pos // unit == (end - 1) // unit:                 # inside one beat
-            return None if off in IN_QUARTER_BEAT.get(dur, ()) else "R-METER-5"
-        if off == 0 and dur in (12, 18, 24, 36, 48):
-            if bpb == 4 and pos < 24 < end:                  # across the middle of 4/4
-                ok = (pos, dur) in {(0, 48), (0, 36), (12, 36), (12, 24), (12, 18)}
+            return None if _in_beat_ok(off, dur, True) else "R-METER-5"
+        if off == 0 and dur in (T, DOTTED, 2 * T, 3 * T, 4 * T):
+            if bpb == 4 and pos < 2 * T < end:               # across the middle of 4/4
+                ok = (pos, dur) in {(0, 4 * T), (0, 3 * T), (T, 3 * T), (T, 2 * T), (T, DOTTED)}
                 return None if ok else "R-METER-3"
-            return None if dur != 48 or pos == 0 else "R-METER-2"
-        if off == 6 and dur in (12, 18):                     # 8th-quarter-8th syncopation
-            half = 24 if bpb == 4 else bar
+            return None if dur != 4 * T or pos == 0 else "R-METER-2"
+        if off == E8 and dur in (T, DOTTED):                 # 8th-quarter-8th syncopation
+            half = 2 * T if bpb == 4 else bar
             if pos // half == (end - 1) // half:
                 return None
             return "R-METER-3" if bpb == 4 else "R-METER-4"
-        if bpb == 4 and pos < 24 < end:
+        if bpb == 4 and pos < 2 * T < end:
             return "R-METER-3"
         return "R-METER-4"
     if dur not in COMPOUND_VALUES:
         return "R-METER-10"
     off = pos % unit
     if pos // unit == (end - 1) // unit:
-        return None if dur in IN_DOTTED_BEAT.get(off, ()) else "R-METER-7"
-    if off == 0 and dur in (36, 72) and (dur != 72 or pos == 0):
+        return None if _in_beat_ok(off, dur, False) else "R-METER-7"
+    if off == 0 and dur in (2 * DOTTED_BEAT, 4 * DOTTED_BEAT) and (dur != 4 * DOTTED_BEAT or pos == 0):
         return None
     return "R-METER-7"
 
@@ -126,30 +146,37 @@ def rest_rule(pos: int, dur: int, bpb: int, unit: int) -> str | None:
     off = pos % unit
     crosses = pos // unit != (pos + dur - 1) // unit
     if unit == QUARTER_BEAT:
-        if dur in (9, 18, 36):
+        if dur in (3 * S32, 3 * S16, DOTTED, 3 * T):
             return "R-REST-3"
-        if dur == 24:
-            return None if bpb == 4 and pos in (0, 24) else "R-REST-2"
+        if dur == 2 * T:
+            return None if bpb == 4 and pos in (0, 2 * T) else "R-REST-2"
         if crosses:
             return "R-REST-2"
         if dur in TRIPLET_VALUES:
-            return None if off % 4 == 0 and off + dur <= unit else "R-REST-4"
-        if dur == 12:
+            step = R16 if dur == R16 else R8
+            return None if off % step == 0 and off + dur <= unit else "R-REST-4"
+        if dur == T:
             return None if off == 0 else "R-REST-2"
-        if dur == 6:
-            return None if off in (0, 6) else "R-REST-4"
-        return None if dur == 3 else "R-REST-4"
-    if dur == 36:
-        return None if bar == 72 and pos in (0, 36) else "R-REST-5"
+        return None if _short_rest_ok(off, dur) else "R-REST-4"
+    if dur == 2 * DOTTED_BEAT:
+        return None if bar == 4 * DOTTED_BEAT and pos in (0, 2 * DOTTED_BEAT) else "R-REST-5"
     if crosses:
         return "R-REST-5"
-    if dur == 18:
+    if dur == DOTTED_BEAT:
         return None if off == 0 else "R-REST-5"
-    if dur == 12:
+    if dur == T:
         return None if off == 0 else "R-REST-5"
-    if dur == 6:
-        return None if off % 6 == 0 else "R-REST-5"
-    return None if dur == 3 else "R-REST-5"
+    return None if _short_rest_ok(off, dur) else "R-REST-5"
+
+
+def _short_rest_ok(off: int, dur: int) -> bool:
+    """An 8th rest on an 8th, a 16th rest on a 16th, a 32nd rest on any 32nd
+    (R-REST-4: rests complete the subdivisions, never dotted)."""
+    if dur == E8:
+        return off % E8 == 0
+    if dur == S16:
+        return off % S16 == 0
+    return dur == S32 and off % S32 == 0
 
 
 # ---------------------------------------------------------------- written-score checks
@@ -298,9 +325,9 @@ def needs_courtesy(step: str, octave: int, alter: int, prev: dict, key: int) -> 
 
 
 def _value_name(ticks: int) -> str:
-    return {3: "16th", 6: "8th", 9: "dotted 8th", 12: "quarter", 18: "dotted quarter",
-            24: "half note", 36: "dotted half", 48: "whole note", 72: "dotted whole"}.get(
-        ticks, f"{ticks}-tick note")
+    return {S32: "32nd", 3 * S32: "dotted 16th", S16: "16th", E8: "8th", 3 * S16: "dotted 8th",
+            T: "quarter", DOTTED: "dotted quarter", 2 * T: "half note", 3 * T: "dotted half",
+            4 * T: "whole note", 6 * T: "dotted whole"}.get(ticks, f"{ticks}-tick note")
 
 
 def _beam_unit(pos: int, bpb: int, unit: int) -> int:
@@ -322,11 +349,11 @@ def _beam_checks(els, num: int, bpb: int, unit: int, who: str) -> list[Issue]:
             continue
         units = {_beam_unit(p, bpb, unit) for p, _, _ in group}
         if len(units) > 1:
-            plain = all(d == 6 and not e.duration.tuplets for _, d, e in group)
-            halves = {p // 24 for p, _, _ in group}
+            plain = all(d == E8 and not e.duration.tuplets for _, d, e in group)
+            halves = {p // (2 * T) for p, _, _ in group}
             if unit == QUARTER_BEAT and bpb == 4 and plain and len(halves) == 1:
                 pass                                  # four 8ths over a half bar (R-BEAM-2)
-            elif unit == QUARTER_BEAT and bpb == 4 and len({p // 24 for p, _, _ in group}) > 1:
+            elif unit == QUARTER_BEAT and bpb == 4 and len(halves) > 1:
                 issues.append(Issue("R-BEAM-2", num, f"a beam crosses the middle of the bar{who}"))
             else:
                 rule = "R-BEAM-1" if unit == QUARTER_BEAT else "R-BEAM-3"
@@ -340,7 +367,7 @@ def _beam_checks(els, num: int, bpb: int, unit: int, who: str) -> list[Issue]:
                                     ADVICE))
         group = []
     # 8ths and 16ths of one beat left unbeamed
-    notes = [(p, d, e) for p, d, e in els if not e.isRest and d < 12 and e.duration.type != "quarter"]
+    notes = [(p, d, e) for p, d, e in els if not e.isRest and d < T and e.duration.type != "quarter"]
     for (p1, d1, a), (p2, d2, b) in zip(notes, notes[1:]):
         if p1 + d1 == p2 and _beam_unit(p1, bpb, unit) == _beam_unit(p2, bpb, unit) \
                 and not a.beams.getTypes() and not b.beams.getTypes():
@@ -411,7 +438,7 @@ def _line_checks(arr: Arrangement) -> list[Issue]:
                 last = q.end
     for i in range(len(line) - 1):               # breath inside a fast run (R-BREATH-3)
         a, b = line[i], line[i + 1]
-        if a.breath_after and b.start - a.end < GAP and a.dur < 6 and b.dur < 6:
+        if a.breath_after and b.start - a.end < GAP and a.dur < E8 and b.dur < E8:
             issues.append(Issue("R-BREATH-3", bar(a.start), "a breath inside a run of fast notes",
                                 ADVICE))
 
@@ -440,7 +467,7 @@ def _mark_checks(arr: Arrangement, line: list[QNote]) -> list[Issue]:
     starts = {q.start: q for q in line}
     spt = _seconds_per_tick(arr)
     dyns = sorted((m for m in marks if m.kind == "dynamic"), key=lambda m: m.start)
-    if dyns and dyns[0].start > line[0].start + 3:
+    if dyns and dyns[0].start > line[0].start + S16:
         issues.append(Issue("R-MARK-1", bar(line[0].start), "the first note has no dynamic",
                             ADVICE))
     for a, b in zip(dyns, dyns[1:]):
@@ -451,7 +478,7 @@ def _mark_checks(arr: Arrangement, line: list[QNote]) -> list[Issue]:
             if m.end - m.start < arr.beat_ticks:
                 issues.append(Issue("R-MARK-5", bar(m.start), "a hairpin shorter than a beat",
                                     ADVICE))
-            if any(m.start < d.start < m.end - 3 for d in dyns):
+            if any(m.start < d.start < m.end - S16 for d in dyns):
                 issues.append(Issue("R-MARK-5", bar(m.start), "a hairpin runs past the next "
                                     "dynamic", ADVICE))
         elif m.kind == "trill":
@@ -555,7 +582,7 @@ def _breath_score(i: int, line: list[QNote], arr: Arrangement, aim: float, spt: 
         s += 1.0                                             # at the half bar
     elif q.end % unit == 0:
         s += 0.5
-    fast = lambda n: n.dur < 6 or n.dur * spt < 0.2         # noqa: E731
+    fast = lambda n: n.dur < E8 or n.dur * spt < 0.2        # noqa: E731
     if fast(q) and fast(nxt):
         s -= 3.0                                             # inside a fast run
     tonic = tonic_pc(arr.key_fifths, arr.key_mode)

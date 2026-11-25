@@ -6,3 +6,5 @@ out/
 samples/
 .claude/
 tools/bin/
+tools/audiveris/
+tools/homr/

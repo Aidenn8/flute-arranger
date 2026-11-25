@@ -1,7 +1,7 @@
 """Arrangement -> engraved score (music21), MusicXML and MIDI.
 
-Notes come in as ticks (TICKS_PER_BEAT per quarter). Each note or rest is cut
-into pieces that follow the usual engraving rules, so the page shows the beat:
+Notes come in as ticks (TICKS_PER_BEAT = 48 per quarter). Each note or rest is
+cut into pieces that follow the usual engraving rules, so the page shows the beat:
 - pieces never cross a barline (ties carry long notes over);
 - off-beat notes are tied at the next beat, except the common 8th-quarter-8th
   syncopation inside a half bar;
@@ -20,6 +20,8 @@ top of the splitting above: a pickup bar holds only its notes (R-PAGE-5);
 beams are set per meter (R-BEAM-1..8: by beat, four 8ths over a half bar of
 4/4, threes in compound meters, one group a bar of 3/8, 16th beams unbroken
 inside a beat); a pitch keeps one spelling within a bar (R-ACC-6).
+The finest values written are 32nds and 16th triplets (sheet music that has
+them); inside each 8th the 32nds follow the 16th rules one level down.
 write_outputs tidies the arrangement first and checks the result
 (notation.tidy, notation.lint), writing the report next to the score.
 """
@@ -44,15 +46,19 @@ from music21.stream.makeNotation import setStemDirectionForBeamGroups
 from .checks import bar_ticks, lead_in_ticks
 from .config import FLUTE_PROGRAM, PIANO_PROGRAM, TICKS_PER_BEAT as T
 from .expression import lower_neighbour, upper_neighbour
-from .model import DOTTED_BEAT, QUARTER_BEAT, Arrangement, Mark, QNote
+from .model import (DOTTED_BEAT, QUARTER_BEAT, SIXTEENTH, THIRTY_SECOND, TRIPLET_8TH, TRIPLET_16TH,
+                    Arrangement, Mark, QNote)
 
-D = DOTTED_BEAT       # the beat the page shows in 6/8, 9/8, 12/8 and 3/8 (18 ticks)
+D = DOTTED_BEAT       # the beat the page shows in 6/8, 9/8, 12/8 and 3/8 (72 ticks)
+E8 = T // 2           # an 8th (24 ticks)
+S16, S32 = SIXTEENTH, THIRTY_SECOND            # 12, 6
+R8, R16 = TRIPLET_8TH, TRIPLET_16TH            # 16, 8
 
 
 @dataclass(frozen=True)
 class _Meter:
     bpb: int          # beats per bar
-    beat: int         # ticks per beat: 12 (quarter), 18 (dotted quarter) or 6 (eighth)
+    beat: int         # ticks per beat: 48 (quarter), 72 (dotted quarter) or 24 (eighth)
 
     @property
     def bar(self) -> int:
@@ -255,26 +261,60 @@ def _chord_events(notes: list[QNote], shift: int, flute: list[QNote]) -> list[_E
     return out
 
 
-def _beat_grids(events: list[_Event]) -> dict[int, int]:
-    """Beat index -> 4 (8th-triplet grid) or 3 (16th grid), voted by the onsets in it."""
+def _grid_of(off: int, compound: bool) -> int:
+    """The grid for a position `off` ticks into a quarter beat that no onset votes on."""
+    if not compound and off % R8 == 0 and off % S16:
+        return R8
+    if not compound and off % R16 == 0 and off % S32:
+        return R16
+    return S16 if off % S16 == 0 else S32
+
+
+def _beat_grids(events: list[_Event], compound: bool = False) -> dict[int, int]:
+    """Quarter-beat index -> the grid its notes are written on: 16ths (S16) or 8th
+    triplets (R8), voted by the onsets in it; 32nds (S32) or 16th triplets (R16)
+    where a note starts or ends on one of their places (sheet music); a triplet
+    beat with something on its middle (an 8th's place, the 3rd 16th triplet) is
+    in 16th triplets too. Compound meters have no triplets."""
     votes: dict[int, list[int]] = {}
+    fine: dict[int, list[bool]] = {}              # [needs 32nds, needs 16th triplets]
+    middle: set[int] = set()                      # beats with a start or end on their middle
     for e in events:
         off = e.start % T
-        if off in (3, 6, 9, 4, 8):
-            v = votes.setdefault(e.start // T, [0, 0])
-            v[0 if off % 3 == 0 else 1] += 1
-    return {b: (4 if trip > six else 3) for b, (six, trip) in votes.items()}
+        if off:
+            # off both grids (sheet music with finer values): the nearer one
+            duple = off % S32 == 0 or (off % R16 and min(off % S32, S32 - off % S32)
+                                       <= min(off % R16, R16 - off % R16))
+            votes.setdefault(e.start // T, [0, 0])[0 if duple else 1] += 1
+        for pos in (e.start, e.end):
+            o = pos % T
+            if o == E8:
+                middle.add(pos // T)
+            if o % S16 and o % S32 == 0:
+                fine.setdefault(pos // T, [False, False])[0] = True
+            elif o % S16 and o % R8 and o % R16 == 0:
+                fine.setdefault(pos // T, [False, False])[1] = True
+    grids = {}
+    for b in set(votes) | set(fine):
+        six, trip = votes.get(b, (0, 0))
+        f32, f16t = fine.get(b, (False, False))
+        if not compound and (trip > six or (not six and not trip and f16t and not f32)):
+            grids[b] = R16 if f16t or b in middle else R8
+        else:
+            grids[b] = S32 if f32 else S16
+    return grids
 
 
 def _tidy(events: list[_Event], compound: bool = False) -> list[_Event]:
     """Snap starts and ends onto the grid of the beat they fall in, so every
-    beat is either plain 16ths or 8th triplets (never a mix of the two).
-    Compound meters have no triplets: everything goes on the 16th grid."""
-    grids = {} if compound else _beat_grids(events)
+    beat is either duple (16ths, or 32nds where the music has them) or
+    triplets (8th or 16th triplets), never a mix of the two. Compound meters
+    have no triplets: everything goes on the 16th (or 32nd) grid."""
+    grids = _beat_grids(events, compound)
 
     def snap(pos: int) -> int:
         b, off = divmod(pos, T)
-        g = grids.get(b, 4 if off in (4, 8) and not compound else 3)
+        g = grids.get(b, _grid_of(off, compound))
         return b * T + round(off / g) * g
 
     snapped: dict[int, _Event] = {}
@@ -289,7 +329,7 @@ def _tidy(events: list[_Event], compound: bool = False) -> list[_Event]:
         a.dur = min(a.dur, b.start - a.start)
     for a in out:
         if a.dur <= 0:              # shorter than one grid step: give it one step
-            g = grids.get(a.start // T, 3)
+            g = grids.get(a.start // T, S16)
             a.dur = g
     for a, b in zip(out, out[1:]):
         a.dur = min(a.dur, b.start - a.start)
@@ -310,8 +350,24 @@ def _piece(pos: int, left: int, m: _Meter, rest: bool, trip_beat) -> int:
 # there without crossing the beat. 0: quarter (+8th), dotted 8th (+16th+8th),
 # 8th, 16th; on the 2nd 8th a quarter fills the beat (8th + quarter); on a
 # 16th off the 8th grid a dotted 8th or 8th fills to an 8th or the beat.
-_IN_DOTTED_BEAT = {0: (12, 9, 6, 3), 3: (9, 6, 3), 6: (12, 6, 3), 9: (9, 6, 3),
-                   12: (6, 3), 15: (3,)}
+_IN_DOTTED_BEAT = {0: (4 * S16, 3 * S16, 2 * S16, S16), S16: (3 * S16, 2 * S16, S16),
+                   2 * S16: (4 * S16, 2 * S16, S16), 3 * S16: (3 * S16, 2 * S16, S16),
+                   4 * S16: (2 * S16, S16), 5 * S16: (S16,)}
+
+
+def _in_eighth(o8: int, rest: bool) -> list[int]:
+    """32nds inside one 8th (`o8` ticks into it), the 16th rules one level down
+    (R-METER-5): a dotted 16th fills the 8th from its start or its 2nd 32nd, a
+    16th starts on the 8th or its middle (a note also on the 2nd 32nd:
+    32nd-16th-32nd), a 32nd anywhere; rests are never dotted."""
+    out = []
+    if not rest and o8 in (0, S32):
+        out.append(3 * S32)
+    if o8 in (0, S16) or (o8 == S32 and not rest):
+        out.append(S16)
+    if o8 % S32 == 0:
+        out.append(S32)
+    return out
 
 
 def _compound_piece(pos: int, left: int, bar: int, rest: bool) -> int:
@@ -322,21 +378,22 @@ def _compound_piece(pos: int, left: int, bar: int, rest: bool) -> int:
         if off == 0:
             if bar == 4 * D and pos % (2 * D) == 0:
                 cands.append(2 * D)        # dotted half rest: half a bar of 12/8
-            cands += [D, 12]               # a whole beat; a quarter rest for two 8ths
-        if off % 6 == 0:
-            cands.append(6)
-        if off % 3 == 0:
-            cands.append(3)
+            cands += [D, 2 * E8]           # a whole beat; a quarter rest for two 8ths
+        if off % E8 == 0:
+            cands.append(E8)
+        if off % S16 == 0:
+            cands.append(S16)
     else:
         if off == 0:
             for d in (4 * D, 2 * D, D):    # dotted whole, dotted half, dotted quarter
                 if pos + d <= bar and (d != 4 * D or pos == 0):
                     cands.append(d)
         cands += _IN_DOTTED_BEAT.get(off, ())
+    cands += _in_eighth(off % E8, rest)
     cands = [d for d in cands if d <= left]
     if cands:
         return max(cands)
-    for d in (6, 3, 2, 1):                 # off the grid (should not happen after _tidy)
+    for d in (E8, S16, S32, 4, 3, 2, 1):   # off the grid (should not happen after _tidy)
         if d <= left and off + d <= D:
             return d
     return 1
@@ -349,45 +406,49 @@ def _simple_piece(pos: int, left: int, bpb: int, rest: bool, trip_beat) -> int:
     bar = bpb * T
     trip = trip_beat(beat)
     cands: list[int] = []
+    dotted = T * 3 // 2
     if rest:
         if off == 0:
-            if bpb == 4 and pos % 24 == 0:
-                cands.append(24)
+            if bpb == 4 and pos % (2 * T) == 0:
+                cands.append(2 * T)
             cands.append(T)
     else:
         if off == 0:
-            for d in (48, 36, 24, 18, 12):
-                if pos + d > bar or (d == 48 and pos != 0):
+            for d in (4 * T, 3 * T, 2 * T, dotted, T):
+                if pos + d > bar or (d == 4 * T and pos != 0):
                     continue
-                if d == 18 and trip_beat(beat + 1):
+                if d == dotted and trip_beat(beat + 1):
                     continue
                 cands.append(d)
-        elif off == 6 and not trip:
+        elif off == E8 and not trip:
             # 8th-quarter-8th syncopation, kept inside a half bar of 4/4
-            ok = (6, 30) if bpb == 4 else (6, 18)
+            ok = (E8, 2 * T + E8) if bpb == 4 else (E8, T + E8)
             if pos in ok:
-                if pos + 18 <= bar:
-                    cands.append(18)
+                if pos + dotted <= bar:
+                    cands.append(dotted)
                 if not trip_beat(beat + 1):
-                    cands.append(12)
+                    cands.append(T)
     # inside one beat
     if trip:
-        if off in (0, 4):
-            cands.append(8)
-        if off % 4 == 0:
-            cands.append(4)
+        if off in (0, R8):
+            cands.append(2 * R8)
+        if off % R8 == 0:
+            cands.append(R8)
+        if off % R16 == 0:
+            cands.append(R16)
     else:
-        if not rest and off in (0, 3):
-            cands.append(9)
-        if off in (0, 6) or (off == 3 and not rest):
-            cands.append(6)
-        if off % 3 == 0:
-            cands.append(3)
+        if not rest and off in (0, S16):
+            cands.append(3 * S16)
+        if off in (0, E8) or (off == S16 and not rest):
+            cands.append(E8)
+        if off % S16 == 0:
+            cands.append(S16)
+        cands += _in_eighth(off % E8, rest)
     cands = [d for d in cands if d <= left]
     if cands:
         return max(cands)
     # off the grid (should not happen after _tidy): fill to the next simple point
-    for d in (6, 4, 3, 2, 1):
+    for d in (E8, R8, S16, R16, S32, 4, 3, 2, 1):
         if d <= left and off + d <= T:
             return d
     return 1
@@ -421,6 +482,16 @@ def _ql(ticks: int) -> Fraction:
     return Fraction(ticks, T)
 
 
+def _value(ticks: int) -> duration.Duration:
+    """A written value as _pieces split it, final: music21's makeNotation is not to
+    split or merge it again (its tuplet completion miscounts a tuplet group with a
+    grace note in it and splits the note after the group)."""
+    d = duration.Duration(_ql(ticks))
+    _ = d.type, d.tuplets               # music21 works out type and tuplets lazily: now
+    d.expressionIsInferred = False
+    return d
+
+
 def _fill_measures(part: stream.Stream, events: list[_Event], n_bars: int, arr: Arrangement,
                    staff_clef, top: bool, compress_rests: bool = False,
                    marks: "_Marks | None" = None, pickup: int = 0) -> None:
@@ -430,7 +501,7 @@ def _fill_measures(part: stream.Stream, events: list[_Event], n_bars: int, arr: 
     mtr = _meter_of(arr)
     bar = mtr.bar
     trip_beats = set() if mtr.compound else {
-        pos // T for e in events for pos in (e.start, e.end) if pos % T in (4, 8)}
+        pos // T for e in events for pos in (e.start, e.end) if pos % R16 == 0 and pos % S32}
     first_number = 0 if pickup else 1
     measures = [stream.Measure(number=i + first_number) for i in range(n_bars)]
     if pickup:
@@ -443,7 +514,8 @@ def _fill_measures(part: stream.Stream, events: list[_Event], n_bars: int, arr: 
 
     def rests(a: int, b: int) -> None:
         for s, d, whole in _pieces(a, b, mtr, True, trip_beats):
-            r = note.Rest(quarterLength=_ql(d))
+            r = note.Rest()
+            r.duration = _value(d)
             if whole:
                 r.fullMeasure = True
             put(s, r)
@@ -460,7 +532,7 @@ def _fill_measures(part: stream.Stream, events: list[_Event], n_bars: int, arr: 
                 el = note.Note(spell(e.pitches[0], arr.key_fifths, arr.key_mode, e.direction))
             else:
                 el = chord.Chord([spell(p, arr.key_fifths, arr.key_mode) for p in e.pitches])
-            el.duration = duration.Duration(_ql(d))
+            el.duration = _value(d)
             el.volume.velocity = max(1, min(127, e.velocity))
             if len(pieces) > 1:
                 el.tie = tie.Tie("start" if i == 0 else "stop" if i == len(pieces) - 1
@@ -581,7 +653,7 @@ def _beam_part(part: stream.Stream, m: _Meter) -> None:
 def _half_bar_eighths(runs: list[list[tuple[int, object]]]) -> list[list[tuple[int, object]]]:
     """4/4: beats 1-2 (or 3-4) of two plain 8ths each become one group of four (R-BEAM-2)."""
     def plain_beat(run) -> bool:
-        return (len(run) == 2 and run[0][0] % T == 0 and run[1][0] == run[0][0] + 6
+        return (len(run) == 2 and run[0][0] % T == 0 and run[1][0] == run[0][0] + E8
                 and all(el.duration.type == "eighth" and not el.duration.tuplets
                         and not el.duration.dots for _, el in run))
 
@@ -589,7 +661,7 @@ def _half_bar_eighths(runs: list[list[tuple[int, object]]]) -> list[list[tuple[i
     for run in runs:
         prev = out[-1] if out else None
         if (prev is not None and plain_beat(run) and plain_beat(prev)
-                and prev[0][0] % 24 == 0 and run[0][0] == prev[0][0] + T):
+                and prev[0][0] % (2 * T) == 0 and run[0][0] == prev[0][0] + T):
             out[-1] = prev + run
         else:
             out.append(run)
@@ -598,8 +670,8 @@ def _half_bar_eighths(runs: list[list[tuple[int, object]]]) -> list[list[tuple[i
 
 def _set_beams(run: list[tuple[int, object]]) -> None:
     """Beams for one group: each level runs over the notes that have it; a lone
-    16th gets a partial beam, pointing right on the first note or on an 8th
-    boundary, else left."""
+    16th (32nd) gets a partial beam, pointing right on the first note or on an
+    8th (16th) boundary, else left."""
     levels = [_BEAMS[el.duration.type] for _, el in run]
     n = len(run)
     kinds: list[list[tuple[str, str | None]]] = [[] for _ in run]
@@ -618,7 +690,7 @@ def _set_beams(run: list[tuple[int, object]]) -> None:
                     kinds[k].append(("continue", None))
                 kinds[j].append(("stop", None))
             else:
-                right = i == 0 or (i < n - 1 and run[i][0] % 6 == 0)
+                right = i == 0 or (i < n - 1 and run[i][0] % (T >> (level - 1)) == 0)
                 kinds[i].append(("partial", "right" if right else "left"))
             i = j + 1
     for (_, el), ks in zip(run, kinds):
@@ -727,7 +799,7 @@ class _Marks:
                     or self.texts or self.heading or self.rits)
 
 
-def _nearest(starts: list[int], tick: int, tol: int = 3) -> int | None:
+def _nearest(starts: list[int], tick: int, tol: int = S16) -> int | None:
     """Index of the event starting at tick, or within tol ticks of it (tidying moves onsets)."""
     i = bisect_left(starts, tick)
     near = [j for j in (i - 1, i) if 0 <= j < len(starts) and abs(starts[j] - tick) <= tol]
@@ -939,7 +1011,7 @@ def _write_midi(arr: Arrangement, lay: _Layout, path: Path) -> None:
 # FERMATA_HOLD times as long (at most FERMATA_MAX s more). Trills (from the
 # upper note, with a turn at the end), mordents, turns and grace notes are
 # played out, ORN_STEP s per ornament note.
-MIDI_RESOLUTION = 480                 # MIDI ticks per quarter: 40 per tick of ours
+MIDI_RESOLUTION = 480                 # MIDI ticks per quarter: 10 per tick of ours
 DYN_VELOCITY = (45, 56, 68, 80, 94, 108)          # pp p mp mf f ff
 DYN_CC11 = (88, 98, 106, 114, 121, 127)
 ACCENT_PLUS, TENUTO_PLUS = 14, 4
@@ -970,7 +1042,7 @@ class _Performance:
             s, e = max(0, min(s, n)), max(0, min(e, n))
             span = max(e - s, 1)
             for t in range(s, e):                 # the speed falls a 16th at a time
-                speed = 1 - (1 - RIT_SLOW) * min(1.0, ((t - s) // 3 * 3 + 3) / span)
+                speed = 1 - (1 - RIT_SLOW) * min(1.0, ((t - s) // S16 * S16 + S16) / span)
                 mult[t] = 1 / speed
             back = next((r for r in resets if r >= e), n)
             mult[e:max(e, min(back, n))] = 1 / RIT_SLOW
@@ -1044,7 +1116,7 @@ class _Performance:
     def expression_cc(self) -> list[pretty_midi.ControlChange]:
         if self.level is None:
             return []
-        ticks = sorted(set(range(0, self.n, 3)) | {t for t, _, _ in self.marks.dynamics if t >= 0})
+        ticks = sorted(set(range(0, self.n, S16)) | {t for t, _, _ in self.marks.dynamics if t >= 0})
         out, last = [], None
         for t in ticks:
             v = int(round(np.interp(self.level(t), range(6), DYN_CC11)))

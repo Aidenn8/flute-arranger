@@ -52,7 +52,7 @@
 <tr>
   <td valign="top">Beat:</td>
   <td>{{ radios("tempo", opts.tempo, [("0", "as heard"), ("-1", "half as fast"), ("1", "twice as fast")]) }}<br>
-  <small>Notes look too short (lots of 16ths in a calm song)? Try twice as fast. Too long (half and whole notes in a lively song)? Try half as fast.</small></td>
+  <small>Notes look too short (lots of 16ths in a calm song)? Try twice as fast. Too long (half and whole notes in a lively song)? Try half as fast.{% if tap %} Or tap the beat yourself (under Listen, below).{% endif %}</small></td>
 </tr>
 {% endif %}
 <tr>
@@ -95,6 +95,12 @@
 <p><b>Sorry, the sheet music couldn't be made with these options.</b></p>
 <p>{{ arrange_error }}</p>
 <p><small>Try other options above. The details are in this song's log.txt.</small></p>
+{% if tap and tap.active %}
+<form method="post" action="{{ url_for('song_taps_undo', song_id=meta.id) }}">
+{% for k, v in tap.keep.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+<input type="submit" value="Undo taps"> <small>Goes back to the beat it found by itself.</small>
+</form>
+{% endif %}
 {% else %}
 
 {% if warnings %}
@@ -131,6 +137,67 @@
 {% if musicxml_url %} | <a href="{{ musicxml_url }}">Download MusicXML</a> <small>(for MuseScore)</small>{% endif %}
 {% if midi_url %} | <a href="{{ midi_url }}">Download MIDI</a>{% endif %}
 </p>
+
+{% if tap %}
+<hr>
+<p><b>Tap the beat</b></p>
+{% if tap.active %}
+<p>The beat now comes from your {{ tap.count }} taps{% if tap.bars %} and {{ tap.bars }} bar start{{ 's' if tap.bars != 1 }}{% endif %}{% if tap.span %} ({{ tap.span }}; outside that it follows the beat it found by itself){% endif %}.</p>
+{% if tap.needs_more %}<p><b>Heads up:</b> the beat it found by itself slips against your taps, so outside the part you tapped the rhythm may come out wrong. For this song, tap along through the whole song (or undo the taps).</p>{% endif %}
+<form method="post" action="{{ url_for('song_taps_undo', song_id=meta.id) }}">
+{% for k, v in tap.keep.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+<input type="submit" value="Undo taps"> <small>Goes back to the beat it found by itself.</small>
+</form>
+{% endif %}
+<p><small>If the notes look too fast or too slow, or the bar lines are in the wrong place: play the song here and tap along on every beat with the space bar (or the Tap button), at least {{ tap.min }} beats; the more of the song you tap, the better. To set the bar lines too, hold Shift (or press B, or use the other button) on the first beat of each bar.</small></p>
+<p><audio id="tap-audio" controls preload="none" src="{{ original_url }}"></audio></p>
+<p><button type="button" id="tap-button">Tap</button>
+<button type="button" id="tap-bar">Tap: first beat of a bar</button>
+<span id="tap-count">Taps: 0</span></p>
+<form method="post" action="{{ url_for('song_taps', song_id=meta.id) }}">
+<input type="hidden" name="taps" id="tap-times" value="">
+<input type="hidden" name="bars" id="tap-bars" value="">
+{% for k, v in tap.keep.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+<input type="submit" id="tap-send" value="Use my taps"> <button type="button" id="tap-clear">Start over</button>
+<small>Takes a few seconds.</small>
+</form>
+<script>
+(function () {
+  var audio = document.getElementById("tap-audio");
+  var count = document.getElementById("tap-count");
+  var send = document.getElementById("tap-send");
+  var taps = [], bars = [], need = {{ tap.min }};
+  function show(note) {
+    count.textContent = note || ("Taps: " + taps.length + (bars.length ? " (bar starts: " + bars.length + ")" : ""));
+    send.disabled = taps.length < need;
+    document.getElementById("tap-times").value = taps.join(",");
+    document.getElementById("tap-bars").value = bars.join(",");
+  }
+  function tap(bar) {
+    if (audio.paused) { show("Press play on the song first."); return; }
+    var t = Math.round(audio.currentTime * 1000) / 1000;
+    taps.push(t);
+    if (bar) bars.push(t);
+    show();
+  }
+  document.getElementById("tap-button").addEventListener("mousedown", function (e) { e.preventDefault(); tap(e.shiftKey); });
+  document.getElementById("tap-bar").addEventListener("mousedown", function (e) { e.preventDefault(); tap(true); });
+  document.getElementById("tap-clear").addEventListener("click", function () { taps = []; bars = []; show(); });
+  function key(e) {
+    var name = (e.target && e.target.tagName || "").toLowerCase();
+    if (audio.paused || e.metaKey || e.ctrlKey || e.altKey || name === "input" || name === "textarea" || name === "select") return false;
+    return e.key === " " || e.key === "b" || e.key === "B";
+  }
+  document.addEventListener("keydown", function (e) {
+    if (!key(e)) return;
+    e.preventDefault();
+    if (!e.repeat) tap(e.key !== " " || e.shiftKey);
+  }, true);
+  document.addEventListener("keyup", function (e) { if (key(e)) e.preventDefault(); }, true);
+  show();
+})();
+</script>
+{% endif %}
 
 <hr>
 

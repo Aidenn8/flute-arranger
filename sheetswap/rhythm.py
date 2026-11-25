@@ -3,11 +3,12 @@
 All the work happens in beat space (grid.to_ticks), so a song that speeds up
 or slows down still lands on the beat.
 
-The beat is grid.beat_ticks long: a quarter (12), a dotted quarter (18, in
-6/8, 9/8, 12/8) or an eighth (6, in 3/8). A quarter beat splits into 8ths,
+The beat is grid.beat_ticks long: a quarter (48), a dotted quarter (72, in
+6/8, 9/8, 12/8) or an eighth (24, in 3/8). A quarter beat splits into 8ths,
 16ths or 8th triplets; a dotted beat into three 8ths or six 16ths (no
 triplets: three even notes in a dotted beat are plain 8ths); an eighth beat
-into two 16ths.
+into two 16ths. (The tick grid is finer than that, for sheet music with 32nds
+and 16th triplets; a recording is read no finer than 16ths.)
 
 Onsets are read a beat at a time as rhythm patterns (the places where notes
 start in the beat), the way a musician reads them: the likeliest pattern
@@ -26,12 +27,15 @@ from dataclasses import replace
 from itertools import combinations
 from statistics import median
 
-from .model import DOTTED_BEAT, EIGHTH_BEAT, QUARTER_BEAT, BeatGrid, Note, QNote
+from .model import (DOTTED_BEAT, EIGHTH_BEAT, QUARTER_BEAT, SIXTEENTH, TRIPLET_8TH, BeatGrid,
+                    Note, QNote)
 
-SIXTEENTH = 3
-TRIPLET = 4
-EIGHTH = 6
+TRIPLET = TRIPLET_8TH
+EIGHTH = QUARTER_BEAT // 2
 QUARTER = QUARTER_BEAT
+# The timing constants below were tuned on a grid of 12 ticks a quarter; this
+# is one of those ticks (a third of a 16th) on today's grid.
+TICK12 = QUARTER_BEAT / 12
 
 # How common each beat pattern (onset places, ticks from the beat) is in
 # printed music, as pseudo-counts; any other pattern on the beat's grid
@@ -39,29 +43,34 @@ QUARTER = QUARTER_BEAT
 # rest or tie, four 16ths, 8th + two 16ths, two 16ths + 8th, dotted 8th +
 # 16th, 16th rest + three 16ths, 16th + dotted 8th, a triplet, quarter + 8th
 # of a triplet.
+S, R = SIXTEENTH, TRIPLET
 VOCAB = {
-    QUARTER_BEAT: {(): 4, (0,): 8, (0, 6): 6, (6,): 1, (0, 3, 6, 9): 4, (0, 6, 9): 2,
-                   (0, 3, 6): 2, (0, 9): 1.5, (3, 6, 9): 0.5, (0, 3): 0.3, (0, 4, 8): 1,
-                   (0, 8): 0.2},
+    QUARTER_BEAT: {(): 4, (0,): 8, (0, 2 * S): 6, (2 * S,): 1, (0, S, 2 * S, 3 * S): 4,
+                   (0, 2 * S, 3 * S): 2, (0, S, 2 * S): 2, (0, 3 * S): 1.5, (S, 2 * S, 3 * S): 0.5,
+                   (0, S): 0.3, (0, R, 2 * R): 1, (0, 2 * R): 0.2},
     # a dotted beat: held, dotted quarter, three 8ths, quarter + 8th, 8th +
     # quarter, siciliano (dotted 8th, 16th, 8th), six 16ths, 8ths mixed with 16ths
-    DOTTED_BEAT: {(): 4, (0,): 8, (0, 6, 12): 6, (0, 12): 3, (0, 6): 1, (6,): 0.5,
-                  (6, 12): 0.5, (12,): 0.3, (0, 9, 12): 1, (0, 3, 6, 9, 12, 15): 3,
-                  (0, 6, 12, 15): 0.5, (0, 3, 6, 12): 0.5, (0, 6, 9, 12): 0.5,
-                  (0, 6, 9, 12, 15): 0.3, (0, 3, 6, 9, 12): 0.3},
+    DOTTED_BEAT: {(): 4, (0,): 8, (0, 2 * S, 4 * S): 6, (0, 4 * S): 3, (0, 2 * S): 1, (2 * S,): 0.5,
+                  (2 * S, 4 * S): 0.5, (4 * S,): 0.3, (0, 3 * S, 4 * S): 1,
+                  (0, S, 2 * S, 3 * S, 4 * S, 5 * S): 3, (0, 2 * S, 4 * S, 5 * S): 0.5,
+                  (0, S, 2 * S, 4 * S): 0.5, (0, 2 * S, 3 * S, 4 * S): 0.5,
+                  (0, 2 * S, 3 * S, 4 * S, 5 * S): 0.3, (0, S, 2 * S, 3 * S, 4 * S): 0.3},
     # an eighth beat (3/8 in three): held, an 8th, two 16ths, 16th rest + 16th
-    EIGHTH_BEAT: {(): 4, (0,): 8, (0, 3): 4, (3,): 0.5},
+    EIGHTH_BEAT: {(): 4, (0,): 8, (0, S): 4, (S,): 0.5},
 }
+del S, R
 RARE = 0.05
 PRIOR_BEATS = 24     # the vocabulary weighs as much as this many of the piece's own beats
 ROUNDS = 4           # times the piece's own pattern counts are learned again
-SPREAD = (0.8, 1.25, 2.5)   # ticks: timing spread of the playing (least, first guess, most)
+SPREAD = (0.8 * TICK12, 1.25 * TICK12, 2.5 * TICK12)   # timing spread of the playing, in
+                                                         # ticks (least, first guess, most)
 DROP = 15.0          # cost of leaving an onset out (when a beat can't hold them all) ...
 GRACE_DROP = 5.0     # ... or of a grace note: under a 16th long, and under half as long as a note
                      # starting less than a 16th from it
-MERGE = 1.5          # ticks: onsets closer than this are one note (the louder one stays)
+MERGE = 1.5 * TICK12  # ticks: onsets closer than this are one note (the louder one stays)
 PUSH = 0.25          # of a beat: an onset this close before a beat may be its downbeat
-TRIPLET_CLEAR = 1.0  # ticks: a beat clearly in triplets has 3+ onsets this close to 0, 4, 8 ...
+TRIPLET_CLEAR = 1.0 * TICK12  # ticks: a beat clearly in triplets has 3+ onsets this close to
+                              # its triplet 8ths ...
 TRIPLET_SHARE = 0.1  # ... and triplets are read only if this share of beats with 2+ onsets are
 # The meter's hierarchy (docs/notation_rules.md R-METER-3, R-PHR-2): beat 1 is
 # the strongest place in the bar, then the middle of a 4/4 or 12/8 bar, then the

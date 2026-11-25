@@ -12,7 +12,8 @@ import numpy as np
 from .model import (DOTTED_BEAT, EIGHTH_BEAT, METERS, Analysis, ArrangeOptions, Arrangement, Mark,
                     BeatGrid, Note, QNote)
 
-RENDER_VERSION = 2   # bump when the way pages are written changes (notation rules, expression)
+RENDER_VERSION = 3   # bump when the way pages are written changes (notation rules, expression,
+                     # 3: 48 ticks a quarter, so info.json's ticks changed)
 ProgressFn = Callable[[int, int, str], None]
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus", ".webm", ".aiff", ".aif"}
 MIDI_EXTS = {".mid", ".midi"}
@@ -212,9 +213,18 @@ def other_instrument_cover(general: list[Note], piano: list[Note], duration: flo
 def find_beats(mono: Path, stems: dict, kind: str, sources: dict) -> BeatGrid:
     """Beats and bars: the Beat This! network, or the older librosa tracker if it fails.
 
-    The transcribed notes (all parts) help the network choose 3 or 4 beats a bar."""
+    The transcribed notes (all parts) help the network choose 3 or 4 beats a bar.
+    For solo piano, SHEETSWAP_PIANO_BEATS=pm2s reads the beats from the transcribed
+    notes instead (PM2S, pm2s_beats). Off by default: on the 13 reference piano
+    recordings it put 41% of the tune's notes exactly where the score has them
+    against Beat This!'s 72%, better on 2 pieces only (bench/pm2s_results.md)."""
     import logging
     from .beats import track_beats
+    if kind == "piano" and sources.get("piano") and os.environ.get("SHEETSWAP_PIANO_BEATS") == "pm2s":
+        from . import pm2s_beats
+        reading = pm2s_beats.read(sources["piano"], quantise=False, extras=False)
+        if reading is not None:
+            return pm2s_beats.grid(reading)
     try:
         from .neural_beats import track_beats_neural
         return track_beats_neural(mono, notes=[n for ns in sources.values() for n in ns])
@@ -234,6 +244,57 @@ def regrid(song_dir: Path) -> Analysis:
     tmp = song_dir / "analysis.json.tmp"
     an.save(tmp)
     os.replace(tmp, song_dir / "analysis.json")
+    return an
+
+
+def apply_taps(song_dir: Path, taps: list[float], bars: list[float] | None = None) -> Analysis:
+    """Write the song on the beat the user tapped (taps.grid_from_taps), from now on.
+
+    Taps are read against the automatic grid, which taps.json keeps for
+    undo_taps. Without tapped bar starts the tune's long notes may still move
+    beat 1 (as for the tracker's bars); the cached pages are cleared."""
+    import shutil
+    from . import taps as tapping
+    from .beats import melody_downbeat
+    song_dir = Path(song_dir)
+    an = load_analysis(song_dir)
+    if an.kind in ("midi", "score"):
+        raise ValueError("Tapping the beat works for recordings only.")
+    auto = tapping.saved_grid(song_dir) or an.grid
+    grid = tapping.grid_from_taps(taps, an.duration, bars, auto)
+    starts = [n.start for ns in an.sources.values() for n in ns]
+    if starts:
+        if not bars:
+            melody, _, _ = pick_melody(an, "auto")
+            accomp = an.sources.get("bass") or [n for n in an.sources.get("piano", []) if n.pitch < 55]
+            moved = melody_downbeat(melody, replace(grid, tracker="neural"), min(starts), accomp)
+            grid = replace(moved, tracker="taps")
+        grid = tapping.first_bar_at(grid, min(starts))
+    an.grid = grid
+    tmp = song_dir / "analysis.json.tmp"
+    an.save(tmp)
+    os.replace(tmp, song_dir / "analysis.json")
+    tapping.save_taps(song_dir, taps, bars, auto, an.duration)
+    shutil.rmtree(song_dir / "arr", ignore_errors=True)
+    return an
+
+
+def undo_taps(song_dir: Path) -> Analysis:
+    """Back to the automatic beat (kept in taps.json; found again if that's missing)."""
+    import shutil
+    from . import taps as tapping
+    song_dir = Path(song_dir)
+    auto = tapping.saved_grid(song_dir)
+    if auto is None:
+        an = regrid(song_dir)
+    else:
+        an = load_analysis(song_dir)
+        an.grid = auto
+        tmp = song_dir / "analysis.json.tmp"
+        an.save(tmp)
+        os.replace(tmp, song_dir / "analysis.json")
+    tapping.forget_taps(song_dir)
+    shutil.rmtree(song_dir / "arr", ignore_errors=True)
     return an
 
 

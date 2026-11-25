@@ -25,7 +25,7 @@ from collections import Counter, defaultdict
 from math import floor
 
 from .harmony import Chord, harmonize
-from .model import DOTTED_BEAT, QUARTER_BEAT, BeatGrid, Note, QNote
+from .model import DOTTED_BEAT, EIGHTH_BEAT, QUARTER_BEAT, SIXTEENTH, BeatGrid, Note, QNote
 
 LH_LOW, LH_HIGH = 36, 47     # chords style: bass note register (C2..B2)
 RH_LOW, RH_HIGH = 52, 67     # chords style: right-hand triad register (E3..G4)
@@ -36,7 +36,7 @@ CLEAN_GAP = 2                # cleaned style: notes >= flute - 1 must move
 SAFE_GAP = 1                 # every style: strictly under the flute
 SPLIT = 60                   # cleaned style: below middle C goes to the left hand
 MAX_RH, MAX_LH = 3, 2        # cleaned style: notes per onset
-TUNE_TOL = 3                 # ticks (a 16th) for "starts with the flute note"
+TUNE_TOL = SIXTEENTH         # ticks for "starts with the flute note"
 TUNE_VOTES = 4               # flute notes that must agree on the tune's octave move
 MIN_NOTE_S = 0.05            # shorter transcribed notes are blips
 PIANO_LOW, PIANO_HIGH = 21, 108
@@ -76,7 +76,7 @@ def _keep_under(hand: list[QNote], flute: _FluteFloor, gap: int) -> list[QNote]:
     return out
 
 
-def _quantize_chords(notes: list[Note], grid: BeatGrid, step: int = 6) -> list[QNote]:
+def _quantize_chords(notes: list[Note], grid: BeatGrid, step: int = EIGHTH_BEAT) -> list[QNote]:
     """Polyphonic quantize in beat space: onsets and ends snap to `step`
     ticks, every note lasts at least one step, the same pitch struck twice at
     one tick becomes one note, and a pitch is cut off when it is struck again."""
@@ -280,7 +280,7 @@ def _cleaned_style(notes, flute_notes, flute: _FluteFloor, grid: BeatGrid, shift
     source = _without_tune(list(notes) + list(bass or []), flute_notes, grid, shift)
     source = [n for n in source if n.end - n.start >= MIN_NOTE_S]
     rh, lh = [], []
-    for q in _quantize_chords(source, grid, step=6):
+    for q in _quantize_chords(source, grid, step=EIGHTH_BEAT):
         if q.start < -bar:                    # nothing before the pickup bar
             continue
         pitch = _fold(q.pitch + shift)

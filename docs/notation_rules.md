@@ -22,8 +22,9 @@ Sources (paraphrased, not quoted):
   *Classical Form* (phrase types).
 - Flute: Samuel Adler, *The Study of Orchestration*; Nancy Toff, *The Flute Book*.
 
-Ticks below are the app's grid: 12 ticks to a quarter note (`config.TICKS_PER_BEAT`),
-so an 8th is 6, a 16th 3, a triplet 8th 4, a dotted-quarter beat 18.
+Ticks below are the app's grid: 48 ticks to a quarter note (`config.TICKS_PER_BEAT`),
+so an 8th is 24, a 16th 12, a 32nd 6, a triplet 8th 16, a triplet 16th 8, a
+dotted-quarter beat 72.
 
 ---
 
@@ -74,7 +75,10 @@ be visible.
 - **R-METER-5** Inside a quarter beat: on the beat a quarter, dotted 8th, 8th or 16th
   may start; on the second 16th a dotted 8th (filling the beat), an 8th
   (16th-8th-16th) or a 16th; on the 8th a 8th or 16th; on the last 16th only a 16th.
-  [score]
+  32nds follow the same rule one level down, inside each 8th: on the 8th a dotted
+  16th, 16th or 32nd; on its second 32nd a dotted 16th (filling the 8th), a 16th
+  (32nd-16th-32nd) or a 32nd; on its middle a 16th or 32nd; on its last 32nd only a
+  32nd. [score] [lint]
 - **R-METER-6** Dotted values are written as dots (not ties) when the dotted value starts
   where R-METER-2 to R-METER-5 allow it; otherwise the value is split and tied
   (R-TIE-2). [score]
@@ -88,9 +92,11 @@ be visible.
 - **R-METER-9** Triplets only where the beat really divides in three; one beat is either
   duple (8ths/16ths) or triplets, never a mix. Compound meters have no triplets (their
   beat already divides in three). [score] [lint]
-- **R-METER-10** The app writes nothing shorter than a 16th (32nds are simplified) and,
-  with "easier to play", nothing shorter than an 8th (checks.py). Off-grid lengths
-  (not a multiple of a 16th or a triplet 8th) are errors. [lint]
+- **R-METER-10** From a recording the app writes nothing shorter than a 16th; sheet
+  music keeps its 32nds and 16th triplets (shorter values, 64ths and 32nd triplets, go
+  to the nearest 32nd with a warning). With "easier to play", nothing shorter than an
+  8th (checks.py). Off-grid lengths (not a 32nd-based value or a 16th/8th triplet) are
+  errors. [lint]
 
 ## 3. Ties and dots (R-TIE)
 
@@ -140,7 +146,8 @@ be visible.
 - **R-BEAM-4** 3/8: one beam over the bar. [score]
 - **R-BEAM-5** Secondary (16th) beams follow the 8th subdivisions of the beat; a 16th
   next to an 8th inside a beat takes a partial beam (a "flag" pointing into the
-  group). [score]
+  group). Third (32nd) beams likewise follow the 16ths: a lone 32nd's partial beam
+  points into its 16th. [score]
 - **R-BEAM-6** Beams never cross a bar line, and a beam does not start or end on a rest
   that sits on a beat boundary. [score]
 - **R-BEAM-7** Triplets: a beamed triplet shows only the number 3; a triplet that is not

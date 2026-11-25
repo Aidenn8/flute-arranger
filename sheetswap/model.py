@@ -2,11 +2,13 @@
 
 Times come in two flavours:
 - Note: seconds, straight from the audio.
-- QNote: ticks on the beat grid (TICKS_PER_BEAT per quarter note, whatever
-  the beat), where tick 0 is the first downbeat. Negative ticks are a pickup.
+- QNote: ticks on the beat grid (TICKS_PER_BEAT = 48 per quarter note,
+  whatever the beat), where tick 0 is the first downbeat. Negative ticks are a
+  pickup. 48 holds every value written music uses down to 32nds and 16th
+  triplets (and 32nd triplets).
 
-The beat itself is a quarter (12 ticks: 2/4, 3/4, 4/4), a dotted quarter
-(18 ticks: 6/8, 9/8, 12/8, or one beat per bar of 3/8) or an eighth (6 ticks:
+The beat itself is a quarter (48 ticks: 2/4, 3/4, 4/4), a dotted quarter
+(72 ticks: 6/8, 9/8, 12/8, or one beat per bar of 3/8) or an eighth (24 ticks:
 3/8 counted in three).
 """
 from __future__ import annotations
@@ -19,11 +21,16 @@ from pathlib import Path
 from statistics import median
 from typing import Mapping
 
-from .config import TICKS_PER_BEAT
+from .config import OLD_TICKS_PER_BEAT, TICKS_PER_BEAT
 
-QUARTER_BEAT = TICKS_PER_BEAT              # 12
-DOTTED_BEAT = TICKS_PER_BEAT * 3 // 2      # 18
-EIGHTH_BEAT = TICKS_PER_BEAT // 2          # 6
+QUARTER_BEAT = TICKS_PER_BEAT              # 48
+DOTTED_BEAT = TICKS_PER_BEAT * 3 // 2      # 72
+EIGHTH_BEAT = TICKS_PER_BEAT // 2          # 24
+# Note values inside a beat, in ticks
+SIXTEENTH = TICKS_PER_BEAT // 4            # 12
+THIRTY_SECOND = TICKS_PER_BEAT // 8        # 6
+TRIPLET_8TH = TICKS_PER_BEAT // 3          # 16
+TRIPLET_16TH = TICKS_PER_BEAT // 6         # 8
 
 # Time choices on the page: "auto" (as heard) or a time signature, as
 # (beats per bar, ticks per beat).
@@ -106,7 +113,7 @@ class BeatGrid:
     beats: list[float]
     beats_per_bar: int = 4
     first_downbeat: int = 0
-    beat_ticks: int = QUARTER_BEAT      # 12 quarter, 18 dotted quarter, 6 eighth
+    beat_ticks: int = QUARTER_BEAT      # 48 quarter, 72 dotted quarter, 24 eighth
     tracker: str = "librosa"            # what found the beats: "neural" (Beat This!), "librosa", "midi"
 
     @property
@@ -175,6 +182,7 @@ class Analysis:
             "duration": self.duration,
             "title": self.title,
             "grid": asdict(self.grid),
+            "ticks_per_beat": TICKS_PER_BEAT,
             "sources": {k: _notes_to_json(v) for k, v in self.sources.items()},
         }
         Path(path).write_text(json.dumps(data))
@@ -182,12 +190,17 @@ class Analysis:
     @classmethod
     def load(cls, path: Path) -> "Analysis":
         d = json.loads(Path(path).read_text())
+        grid = BeatGrid(**d["grid"])
+        # the grid's beat length is in ticks: files from before the finer grid used 12 a quarter
+        written = int(d.get("ticks_per_beat", OLD_TICKS_PER_BEAT))
+        if written != TICKS_PER_BEAT and "beat_ticks" in d["grid"]:
+            grid.beat_ticks = grid.beat_ticks * TICKS_PER_BEAT // written
         return cls(
             song_id=d["song_id"],
             kind=d["kind"],
             duration=d["duration"],
             title=d.get("title", ""),
-            grid=BeatGrid(**d["grid"]),
+            grid=grid,
             sources={k: _notes_from_json(v) for k, v in d["sources"].items()},
         )
 

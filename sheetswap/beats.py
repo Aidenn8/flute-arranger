@@ -121,6 +121,8 @@ def melody_downbeat(melody, grid: BeatGrid, music_start: float, bass=None) -> Be
     downbeat is then the first beat of that phase at or after the music start.
     Returns the grid unchanged when there's too little melody to judge.
     """
+    if grid.tracker == "taps":
+        return grid                     # the user tapped the beat: pipeline.apply_taps placed the bars
     b = np.asarray(grid.beats, dtype=float)
     bpb = grid.beats_per_bar
     if bpb < 2 or len(b) < 2 * bpb or len(melody) < 4 * bpb:
@@ -273,10 +275,10 @@ def beat_subdivision(melody, grid: BeatGrid, accompaniment=None) -> int:
 
 
 def beat_unit(melody, grid: BeatGrid, accompaniment=None) -> int:
-    """Ticks per beat to write the grid's beats in: DOTTED_BEAT (18) when the
-    music splits them in three (beat_subdivision); EIGHTH_BEAT (6) when they
+    """Ticks per beat to write the grid's beats in: DOTTED_BEAT (72) when the
+    music splits them in three (beat_subdivision); EIGHTH_BEAT (24) when they
     are fast (EIGHTH_BEAT_BPM or more), three to a bar and split in two (3/8,
-    as in Für Elise, tracked at 150 eighths a minute); else QUARTER_BEAT (12)."""
+    as in Für Elise, tracked at 150 eighths a minute); else QUARTER_BEAT (48)."""
     counts = _beat_splits(_parts(melody, accompaniment), grid)
     if _subdivision(counts) == 3:
         return DOTTED_BEAT

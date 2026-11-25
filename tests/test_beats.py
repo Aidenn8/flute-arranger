@@ -227,18 +227,18 @@ def test_grid_from_midi_time_signatures():
     def shape(num, den):
         g = grid_from_midi(_midi(num, den))
         return g.beats_per_bar, g.beat_ticks
-    assert shape(None, 4) == (4, 12)                 # no signature: 4/4
-    assert shape(2, 4) == (2, 12)
-    assert shape(4, 4) == (4, 12)
-    assert shape(6, 8) == (2, 18)                    # dotted-quarter beats
-    assert shape(9, 8) == (3, 18)
-    assert shape(12, 8) == (4, 18)
-    assert shape(3, 8) == (3, 6)                     # eighth beats
-    assert shape(5, 4) == (4, 12)                    # anything else: as before
+    assert shape(None, 4) == (4, 48)                 # no signature: 4/4
+    assert shape(2, 4) == (2, 48)
+    assert shape(4, 4) == (4, 48)
+    assert shape(6, 8) == (2, 72)                    # dotted-quarter beats
+    assert shape(9, 8) == (3, 72)
+    assert shape(12, 8) == (4, 72)
+    assert shape(3, 8) == (3, 24)                    # eighth beats
+    assert shape(5, 4) == (4, 48)                    # anything else: as before
     # pretty_midi's 6/8 beats are dotted quarters: 100 quarters a minute = 66.7 beats
     g = grid_from_midi(_midi(6, 8, tempo=100))
     assert abs(g.bpm() - 100 / 1.5) < 0.5
-    assert abs(g.to_ticks(0.6) - 12) < 1e-6          # a quarter note (0.6 s) is 12 ticks
+    assert abs(g.to_ticks(0.6) - 48) < 1e-6          # a quarter note (0.6 s) is 48 ticks
 
 
 def test_grid_from_midi_pickup():
@@ -269,7 +269,7 @@ def test_melody_long_notes_place_beat_one():
     assert g.first_downbeat == 2
     even = [Note(72, i * 0.5, i * 0.5 + 0.45, 80) for i in range(36)]
     assert melody_downbeat(even, grid, 0.0) is grid      # no evidence: unchanged
-    one = BeatGrid(grid.beats, 1, 0, 18)                 # 3/8 a dotted beat a bar: no choice
+    one = BeatGrid(grid.beats, 1, 0, 72)                 # 3/8 a dotted beat a bar: no choice
     assert melody_downbeat(mel, one, 1.0) is one
 
 
@@ -299,9 +299,9 @@ SICILIANO = [(0, 1 / 2, 2 / 3), (0,)]                                    # dotte
 def test_subdivision_jig_vs_march():
     from sheetswap.beats import beat_subdivision, beat_unit
     jig, g = _tune(JIG, period=0.6)
-    assert beat_subdivision(jig, g) == 3 and beat_unit(jig, g) == 18
+    assert beat_subdivision(jig, g) == 3 and beat_unit(jig, g) == 72
     march, g = _tune(MARCH, period=0.5)
-    assert beat_subdivision(march, g) == 2 and beat_unit(march, g) == 12
+    assert beat_subdivision(march, g) == 2 and beat_unit(march, g) == 48
     sic, g = _tune(SICILIANO, period=0.9)
     assert beat_subdivision(sic, g) == 3
     # the grid's downbeat doesn't change where notes fall inside a beat
@@ -342,17 +342,17 @@ def test_fast_three_beat_bars_in_two_become_eighth_beats():
     fast = 60 / (EIGHTH_BEAT_BPM + 10)
     slow = 60 / (EIGHTH_BEAT_BPM - 10)
     notes, g = _tune(elise, period=fast, bpb=3)
-    assert beat_unit(notes, g) == 6                          # 3/8 in eighth beats
+    assert beat_unit(notes, g) == 24                         # 3/8 in eighth beats
     notes, g = _tune(elise, period=slow, bpb=3)
-    assert beat_unit(notes, g) == 12                         # a minuet in 3/4
+    assert beat_unit(notes, g) == 48                         # a minuet in 3/4
     notes, g = _tune(elise, period=fast, bpb=4)
-    assert beat_unit(notes, g) == 12                         # bars of four: stays 4/4
+    assert beat_unit(notes, g) == 48                         # bars of four: stays 4/4
     notes, g = _tune([(0,), (0,), (0,)], period=fast, bpb=3)
-    assert beat_unit(notes, g) == 12                         # a fast waltz on the beats
+    assert beat_unit(notes, g) == 48                         # a fast waltz on the beats
     # a neural tracker puts Für Elise at exactly 150 eighths a minute
     assert EIGHTH_BEAT_BPM <= 130
     notes, g = _tune(elise, period=60 / 150, bpb=3)
-    assert abs(g.bpm() - 150) < 1e-6 and beat_unit(notes, g) == 6
+    assert abs(g.bpm() - 150) < 1e-6 and beat_unit(notes, g) == 24
 
 
 def test_accompaniment_settles_an_ambiguous_tune():
@@ -370,7 +370,7 @@ def test_accompaniment_settles_an_ambiguous_tune():
     assert beat_subdivision(chopin, gc) == 3
     left, _ = _tune([(0, 1 / 3, 2 / 3)], period=60 / 39.5, n_beats=len(tune_pat), seed=1)
     assert beat_subdivision(tune, g, accompaniment=left) == 3
-    assert beat_unit(tune, g, left) == 18
+    assert beat_unit(tune, g, left) == 72
     # a simple-time piece (Träumerei-like) keeps its 8ths with any accompaniment
     march, g = _tune(MARCH, period=0.8)
     eighths, _ = _tune([(0, 1 / 2)], period=0.8, seed=2)

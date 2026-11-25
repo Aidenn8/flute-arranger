@@ -71,6 +71,9 @@ MD = ROOT / "bench" / "ref_results.md"
 NAMES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
 SCALES = (1 / 4, 1 / 3, 1 / 2, 2 / 3, 3 / 4, 1.0, 4 / 3, 3 / 2, 2.0, 3.0, 4.0)
 SR, HOP = 22050, 2048
+# "Exact" = within HALF of our ticks: half of a 12th of a quarter, the tolerance used
+# since the first runs (when ticks were 12 a quarter), so results stay comparable.
+HALF = T / 24
 
 
 def nm(p: int) -> str:
@@ -207,7 +210,7 @@ def mode(xs) -> float:
 
 
 def tempo_scale(q: np.ndarray, tau: np.ndarray) -> float:
-    """Median of our ticks / 12 per reference quarter over spans of >= 2 quarters."""
+    """Median of our quarters (ticks / T) per reference quarter over spans of >= 2 quarters."""
     ratios, k = [], 0
     for a in range(len(q)):
         while k < len(q) and q[k] - q[a] < 2:
@@ -329,8 +332,8 @@ def measure(ref: dict, arr, al: dict) -> dict:
 
     # raw: our quarter = their quarter, our bar 1 = their bar 1
     our_q = tau / T
-    in_bar = np.abs(((our_q % (bar / T)) - (q % L))) < 0.5 / T
-    in_beat = np.abs(((tau % T) / T) - (q % 1.0)) < 0.5 / T
+    in_bar = np.abs(((our_q % (bar / T)) - (q % L))) < HALF / T
+    in_beat = np.abs(((tau % T) / T) - (q % 1.0)) < HALF / T
     down = np.abs(q % L) < 1e-6
     on_line = (tau % bar) == 0
     out["raw"] = dict(meter=f"{time_sig(arr)[0]}/{time_sig(arr)[1]}",
@@ -358,13 +361,13 @@ def measure(ref: dict, arr, al: dict) -> dict:
         meter_ok=meter_ok, bar_written_quarters=round(bar / k, 3), ref_bar_quarters=L,
         bar_offset_quarters=round(off, 3), bar_offset_share_pct=pct(bar_off[1], len(phase)),
         downbeat_ok=bool(meter_ok and abs(off) < 1e-6), beat_slips=slips,
-        onset_exact_pct=pct(np.sum(np.abs(e * k) < 0.5), len(e)),
+        onset_exact_pct=pct(np.sum(np.abs(e * k) < HALF), len(e)),
         onset_16th_pct=pct(np.sum(np.abs(e) <= 0.25 + 1e-6), len(e)),
         onset_mae_beats=round(float(np.mean(np.abs(e))), 3),
         onset_bias_beats=round(float(np.mean(e)), 3),
-        early_pct=pct(np.sum(e * k <= -0.5), len(e)), late_pct=pct(np.sum(e * k >= 0.5), len(e)),
+        early_pct=pct(np.sum(e * k <= -HALF), len(e)), late_pct=pct(np.sum(e * k >= HALF), len(e)),
         plain_tempo_ratio=bool(abs(math.log(s_raw / s)) < 0.05),
-        dur_exact_pct=pct(np.sum(np.abs(dur / k - qd) < 0.5 / k), len(qd)),
+        dur_exact_pct=pct(np.sum(np.abs(dur / k - qd) < HALF / k), len(qd)),
         dur_16th_pct=pct(np.sum(np.abs(dur / k - qd) <= 0.25 + 1e-6), len(qd)),
     )
     # same gap to the next note (rhythm), for neighbours matched on both sides
@@ -372,19 +375,19 @@ def measure(ref: dict, arr, al: dict) -> dict:
            for (i1, j1), (i2, j2) in zip(hits, hits[1:]) if i2 == i1 + 1]
     if ioi:
         a = np.array(ioi)
-        out.update(ioi_exact_pct=pct(np.sum(np.abs(a[:, 0] - a[:, 1]) < 0.5 / k), len(a)),
+        out.update(ioi_exact_pct=pct(np.sum(np.abs(a[:, 0] - a[:, 1]) < HALF / k), len(a)),
                    ioi_16th_pct=pct(np.sum(np.abs(a[:, 0] - a[:, 1]) <= 0.25 + 1e-6), len(a)))
     # what the errors look like, for the report
     err_kinds = Counter()
     for x in e:
-        if abs(x) < 0.5 / k:
+        if abs(x) < HALF / k:
             continue
         err_kinds[f"{x:+.3g}"] += 1
     out["common_onset_errors"] = dict(err_kinds.most_common(4))
     worst = np.argsort(-np.abs(e))[:5]
     out["worst_examples"] = [
         f"{nm(rn[hits[w][0]]['pitch'])} written bar {int(q[w] // L) + 1} beat {q[w] % L + 1:g} "
-        f"-> ours {e[w]:+.2f} q" for w in worst if abs(e[w]) > 0.5 / k]
+        f"-> ours {e[w]:+.2f} q" for w in worst if abs(e[w]) > HALF / k]
     out["_hits"] = hits
     out["_scale"] = k
     return out

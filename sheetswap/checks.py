@@ -4,7 +4,7 @@ from __future__ import annotations
 from bisect import bisect_left
 
 from .config import FLUTE_HARD
-from .model import Arrangement, QNote
+from .model import EIGHTH_BEAT, SIXTEENTH, THIRTY_SECOND, Arrangement, QNote
 
 _NAMES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
 
@@ -70,7 +70,13 @@ def _piano_over_flute(flute: list[QNote], piano: list[QNote]) -> list[QNote]:
     return bad
 
 
-def check_arrangement(arr: Arrangement, simple: bool) -> list[str]:
+_VALUE_NAMES = {EIGHTH_BEAT: "an 8th note", SIXTEENTH: "a 16th note", THIRTY_SECOND: "a 32nd note"}
+
+
+def check_arrangement(arr: Arrangement, simple: bool, shortest: int = SIXTEENTH) -> list[str]:
+    """Problems a player would hit. `shortest`: the shortest note value the part may
+    have (a recording is written no finer than 16ths, sheet music keeps its 32nds);
+    with `simple` it is an 8th."""
     flute = sorted(arr.flute, key=lambda n: (n.start, n.pitch))
     if not flute:
         return ["The flute part is empty: no melody was found."]
@@ -84,10 +90,10 @@ def check_arrangement(arr: Arrangement, simple: bool) -> list[str]:
                         f"range {_name(lo)}-{_name(hi)} (for example {_name(worst.pitch)}), "
                         f"{_where(arr, bad)}.")
 
-    shortest = 6 if simple else 3
+    shortest = EIGHTH_BEAT if simple else shortest
     bad = [n for n in flute if n.dur < shortest]
     if bad:
-        label = "an 8th note" if simple else "a 16th note"
+        label = _VALUE_NAMES.get(shortest, f"{shortest} ticks")
         problems.append(f"{_many(len(bad), 'flute note', 'is', 'are')} shorter than "
                         f"{label}, {_where(arr, bad)}.")
 

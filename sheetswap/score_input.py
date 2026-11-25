@@ -38,9 +38,10 @@ Repeats are written out in full (repeat bars and 1st/2nd endings, in the
 order music21 plays them), since the flute part has no repeat signs; words
 such as "D.C. al Fine" stay as text.
 
-The tick grid has 12 ticks per quarter: 16ths, 8th and 16th triplets fit
-exactly; 32nds and other values that don't are rounded to the nearest tick,
-with a warning.
+The tick grid has 48 ticks per quarter: everything down to 32nds, 16th
+triplets and 64ths fits exactly (the page writes down to 32nds and 16th
+triplets); values that don't fit (quintuplets, 128ths) are rounded to the
+nearest tick, with a warning.
 
 MIDI files: only those that look written rather than played are read here
 (`load_notated_midi`: a time signature, and nearly all notes starting on a
@@ -64,12 +65,14 @@ from fractions import Fraction
 from pathlib import Path
 
 from .config import TICKS_PER_BEAT as T
-from .model import (DOTTED_BEAT, EIGHTH_BEAT, METERS, QUARTER_BEAT, Analysis, Arrangement,
-                    ArrangeOptions, BeatGrid, Mark, Note, QNote, normalize_part, time_signature)
+from .config import OLD_TICKS_PER_BEAT
+from .model import (DOTTED_BEAT, EIGHTH_BEAT, METERS, QUARTER_BEAT, SIXTEENTH, THIRTY_SECOND,
+                    TRIPLET_8TH, TRIPLET_16TH, Analysis, Arrangement, ArrangeOptions, BeatGrid, Mark,
+                    Note, QNote, normalize_part, time_signature)
 
 SCORE_EXTS = (".musicxml", ".xml", ".mxl")
 MIDI_EXTS = (".mid", ".midi")
-FORMAT = 1                     # score.json layout
+FORMAT = 2                     # score.json layout (1: ticks were 12 a quarter)
 
 DEFAULT_BPM = {QUARTER_BEAT: 100, DOTTED_BEAT: 72, EIGHTH_BEAT: 144}   # per beat, when the score has no tempo
 DYNAMIC_VELOCITY = {"pppp": 25, "ppp": 32, "pp": 42, "p": 55, "mp": 68, "mf": 80,
@@ -82,7 +85,7 @@ GRACE_MAX_Q = 0.12             # MIDI: shorter off-grid notes are grace notes (i
 
 NOTE_MARKS = {"staccato", "tenuto", "accent", "fermata", "trill", "mordent", "turn", "grace"}
 PLACED_MARKS = {"dynamic", "text"}
-NEAR = 2                       # ticks: a dynamic or word this soon after a note's start belongs to it
+NEAR = TRIPLET_16TH            # ticks: a dynamic or word this soon after a note's start belongs to it
 
 _ARTICULATIONS = {"Staccato": ("staccato",), "Staccatissimo": ("staccato",),
                   "Spiccato": ("staccato",), "Tenuto": ("tenuto",),
@@ -172,17 +175,20 @@ class ScoreSource:
 
     @classmethod
     def from_dict(cls, d: dict) -> "ScoreSource":
-        if d.get("format") != FORMAT:
+        if d.get("format") not in (1, FORMAT):
             raise ValueError("score.json from another version")
+        k = T // OLD_TICKS_PER_BEAT if d.get("format") == 1 else 1    # format 1: 12 ticks a quarter
         d = dict(d)
         d.pop("format", None)
         parts = []
         for p in d.pop("parts"):
             p = dict(p)
-            p["melody"] = [QNote(int(a), int(b), int(c), int(v)) for a, b, c, v in p["melody"]]
-            p["notes"] = [QNote(int(a), int(b), int(c)) for a, b, c in p["notes"]]
-            p["marks"] = [Mark(str(k), int(s), int(e), str(v)) for k, s, e, v in p["marks"]]
+            p["melody"] = [QNote(int(a), k * int(b), k * int(c), int(v)) for a, b, c, v in p["melody"]]
+            p["notes"] = [QNote(int(a), k * int(b), k * int(c)) for a, b, c in p["notes"]]
+            p["marks"] = [Mark(str(m), k * int(s), k * int(e), str(v)) for m, s, e, v in p["marks"]]
             parts.append(ScorePart(**p))
+        d["beat_ticks"] = k * int(d.get("beat_ticks", QUARTER_BEAT // k))
+        d["pickup"] = k * int(d.get("pickup", 0))
         return cls(parts=parts, **d)
 
     def save(self, path: Path) -> None:
@@ -426,7 +432,7 @@ def _accomp_flags(line: list[QNote], notes: list[QNote], figure: set[tuple[int, 
     chord_at: dict[int, frozenset] = {}           # onset -> pitches of the block chord struck there
     for t, qs in groups.items():
         top = max(qs, key=lambda q: q.pitch)
-        same = [q.pitch for q in qs if abs(q.dur - top.dur) <= 1]
+        same = [q.pitch for q in qs if abs(q.dur - top.dur) <= T // OLD_TICKS_PER_BEAT]
         if len(same) >= 2:
             chord_at[t] = frozenset(same)
     onsets = sorted(groups)
@@ -644,7 +650,7 @@ def _dedupe(marks: list[Mark]) -> list[Mark]:
 
 class _Ticks:
     """Quarter-note offsets -> ticks from the first full bar; remembers where
-    a value fell off the 12-ticks-a-quarter grid."""
+    a value fell off the tick grid (TICKS_PER_BEAT a quarter)."""
 
     def __init__(self, origin):
         self.origin = Fraction(origin).limit_denominator(100000)
@@ -1119,7 +1125,7 @@ def _guess_mode(fifths: int, notes: list[QNote]) -> str:
 def _inexact_warning(ticks: list[int], bar: int) -> str:
     bars = sorted({t // bar + 1 + (1 if t < 0 else 0) for t in ticks})
     shown = ", ".join(str(b) for b in bars[:6]) + (", ..." if len(bars) > 6 else "")
-    return (f"Some notes are quicker than this app's finest grid (32nds or similar, "
+    return (f"Some notes don't fit this app's finest grid (quintuplets, 128ths or similar, "
             f"bar{'s' if len(bars) > 1 else ''} {shown} of the original): they were rounded, "
             "so check those bars against the original.")
 
@@ -1133,13 +1139,17 @@ def _on_grid(q: Fraction, tol: Fraction = Fraction(1, 2400)) -> bool:
     return abs(x - round(x)) <= tol * GRID48
 
 
-def _snap_end(x: Fraction, tol: Fraction = Fraction(1, 20)) -> int:
-    """An end in 12-tick units: exact when it's on the tick grid (within `tol`),
-    else the nearest 16th or 8th-triplet point (notation programs shorten notes a little)."""
+END_TOL = Fraction(T, 240)     # MIDI: an end this close (ticks) to a tick is on it
+
+
+def _snap_end(x: Fraction, tol: Fraction = END_TOL) -> int:
+    """An end in ticks: exact when it's on the tick grid (within `tol`), else the
+    nearest 16th or 8th-triplet point (notation programs shorten notes a little)."""
     r = round(x)
     if abs(x - r) <= tol:
         return r
-    c3, c4 = 3 * round(x / 3), 4 * round(x / 4)
+    c3 = SIXTEENTH * round(x / SIXTEENTH)
+    c4 = TRIPLET_8TH * round(x / TRIPLET_8TH)
     return c3 if abs(c3 - x) <= abs(c4 - x) else c4
 
 
@@ -1176,7 +1186,7 @@ def _first_downbeat(notes: list[tuple[int, int]], bar: int, beat: int, bpb: int)
     total = sum(min(d, bar) for _, d in notes) or 1
     best, best_v = 0, -math.inf
     for o in range(bar):
-        if o % 3 and o % 4:
+        if o % SIXTEENTH and o % TRIPLET_8TH:
             continue
         on = cross = 0.0
         for start, dur in notes:
@@ -1262,7 +1272,7 @@ def _read_midi(path: Path, notated_only: bool) -> ScoreSource | None:
                         "all through, so later bar lines may differ from the original.")
     bar = bpb * beat
 
-    # notes in 12-tick units from the file's start; graces apart
+    # notes in ticks from the file's start; graces apart
     per_inst = []
     for rows in raw:
         evs, graces, inexact = [], [], []
@@ -1275,13 +1285,13 @@ def _read_midi(path: Path, notated_only: bool) -> ScoreSource | None:
                     continue
                 if dur_q >= Fraction(1, 2):
                     # a grace note joined to its main note: start on the beat part it was written on
-                    up = min(-(-x0 // 3) * 3, -(-x0 // 4) * 4)
-                    if up - x0 < Fraction(12, 5):
+                    up = min(-(-x0 // SIXTEENTH) * SIXTEENTH, -(-x0 // TRIPLET_8TH) * TRIPLET_8TH)
+                    if up - x0 < Fraction(T, 5):
                         x0 = Fraction(up)
             start = round(x0)
             if abs(x0 - start) > tol * T:
                 inexact.append(start)
-            end = _snap_end(e * T, max(Fraction(1, 20), tol * T))
+            end = _snap_end(e * T, max(END_TOL, tol * T))
             if end <= start:
                 end = start + max(1, round(dur_q * T))
             evs.append(_Ev(start, end, int(n.pitch), int(n.velocity), refs=[k]))
@@ -1304,7 +1314,7 @@ def _read_midi(path: Path, notated_only: bool) -> ScoreSource | None:
         gstarts = sorted(g.start for g in graces)
         for a, b in zip(line, line[1:]):
             gap = b.start - a.end
-            if 0 < gap < 3 and bisect_left(gstarts, a.end) < bisect_left(gstarts, b.start):
+            if 0 < gap < SIXTEENTH and bisect_left(gstarts, a.end) < bisect_left(gstarts, b.start):
                 a.end = b.start
         marks = _graces_to_marks(graces, line, before=T)
         melody = [QNote(e.pitch, e.start, e.end - e.start, e.velocity) for e in line]
@@ -1546,17 +1556,20 @@ def analysis_for(src: ScoreSource, song_id: str) -> Analysis:
 
 
 def _quick_note_warning(line: list[QNote], bar: int, lead: int) -> str | None:
-    """Notes the page can only write approximately (off the 16th / 8th-triplet grid);
-    ones shorter than a 16th are left to checks.check_arrangement, which names them."""
-    bad = [q for q in line if q.dur >= 3 and (q.start % T % 3 and q.start % T % 4
-                                             or q.end % T % 3 and q.end % T % 4)]
+    """Notes the page can only write approximately (off the 32nd / 16th-triplet grid:
+    64ths, 32nd triplets); ones shorter than a 32nd are left to checks.check_arrangement,
+    which names them."""
+    def off(t: int) -> bool:
+        return bool(t % T % THIRTY_SECOND and t % T % TRIPLET_16TH)
+
+    bad = [q for q in line if q.dur >= THIRTY_SECOND and (off(q.start) or off(q.end))]
     if not bad:
         return None
     bars = sorted({(q.start + lead) // bar + 1 for q in bad})
     shown = ", ".join(str(b) for b in bars[:6]) + (", ..." if len(bars) > 6 else "")
-    return (f"{len(bad)} note{'s are' if len(bad) > 1 else ' is'} quicker than 16ths or 8th-note "
+    return (f"{len(bad)} note{'s are' if len(bad) > 1 else ' is'} quicker than 32nds or 16th-note "
             f"triplets (bar{'s' if len(bars) > 1 else ''} {shown}); the page writes "
-            f"{'them' if len(bad) > 1 else 'it'} on the nearest 16th, so check against the original.")
+            f"{'them' if len(bad) > 1 else 'it'} on the nearest 32nd, so check against the original.")
 
 
 BREATH_PHRASE_BARS = 2         # a slur this long or longer is a phrase, and so is the music since the last breath
@@ -1672,7 +1685,7 @@ def arrange_score(src: ScoreSource, opts: ArrangeOptions
         line, _moved = phrase_octaves(line, [(m.start, m.value) for m in marks if m.kind == "dynamic"],
                                       beat, bpb * beat, _phrase_cuts(src, part, line, marks))
     tick_s = 60.0 / src.quarter_bpm / T
-    line, _outlined = outline_leaps(line, max(3, min(EIGHTH_BEAT, int(0.25 / tick_s))))
+    line, _outlined = outline_leaps(line, max(SIXTEENTH, min(EIGHTH_BEAT, int(0.25 / tick_s))))
     marks = _move_graces(marks, before, line)
     line = _phrase_breaths(line, marks, bpb * beat, add_breath_marks, bpb, beat)
 
@@ -1700,5 +1713,5 @@ def arrange_score(src: ScoreSource, opts: ArrangeOptions
         w = _quick_note_warning(line, bpb * beat, lead_in_ticks(arr))
         if w:
             arr.warnings.append(w)
-    arr.warnings += check_arrangement(arr, opts.simple)
+    arr.warnings += check_arrangement(arr, opts.simple, shortest=THIRTY_SECOND)
     return arr, played, grid

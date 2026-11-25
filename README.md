@@ -89,7 +89,7 @@ What this means for a recording you bring:
 - **Songs with singing**: the notes of the tune come out right, one note per sung syllable; singers stretch rhythm a lot, so **Make it easier to play** gives the most readable result.
 - It finds the tune best when one instrument or voice clearly carries it; in broken-chord piano writing (Für Elise) some chord notes of the tune are still missed (58% of Für Elise's notes found).
 
-Known limits: 16th-note triplets and 32nd runs are simplified; violin double stops lose their lower note; a male voice that sits between two pitches can land a semitone off.
+Known limits: from a recording, 16th-note triplets and 32nd runs are simplified (sheet music keeps them exactly); violin double stops lose their lower note; a male voice that sits between two pitches can land a semitone off.
 
 ## Setting it up from scratch
 
@@ -99,8 +99,11 @@ Needs macOS with Python 3.11 available through [uv](https://docs.astral.sh/uv/).
 uv venv --python 3.11 .venv
 uv pip install --python .venv/bin/python -r requirements.txt
 uv pip install --python .venv/bin/python --no-deps tinysoundfont
+uv venv --python 3.11 tools/homr && uv pip install --python tools/homr/bin/python "homr[cpu]==0.7.1" && tools/homr/bin/homr --init  # sheet-music reader 1 (own venv, ~120 MB of models)
+.venv/bin/python -m sheetswap.omr --fetch-audiveris   # sheet-music reader 2: Audiveris 5.11 + its own Java, into tools/audiveris
 scripts/fetch_models.sh       # piano sound for previews (MuseScore_General, MIT)
 scripts/build_sysaudio.sh     # optional: the recorder for "Listen to this computer"
+scripts/install_pm2s.sh       # optional: PM2S, beats read from a piano recording's notes (off by default)
 ```
 
 The piano transcription model downloads itself into `models/` on first use, and the stem separation model into `~/.cache/huggingface`. No Homebrew packages are needed: audio is decoded with the ffmpeg binary that `imageio-ffmpeg` ships.
@@ -111,7 +114,7 @@ On macOS 14 the models run on the CPU (the Apple GPU path crashes there), so a 4
 
 1. **Separate** the song into singing, drums, bass and the rest (Demucs), unless it's solo piano.
 2. **Write down the notes**: a piano model (ByteDance's piano transcription) and a general model for any instrument (Spotify's Basic Pitch). Notes only the general model hears belong to some other instrument, which tells "solo piano" apart from "piano + violin".
-3. **Find the beat and the bars** with Beat This! (a neural beat and downbeat tracker, ISMIR 2024), which follows a performer's tempo changes; 3 vs 4 beats a bar is settled by which bar length makes the rhythm repeat. Where the notes fall inside each beat tells 6/8-type music (beats split in three, written 9/8 or 12/8) from 2/4-3/4-4/4, and fast three-beat bars split in two become 3/8.
+3. **Find the beat and the bars** with Beat This! (a neural beat and downbeat tracker, ISMIR 2024), which follows a performer's tempo changes; 3 vs 4 beats a bar is settled by which bar length makes the rhythm repeat. Where the notes fall inside each beat tells 6/8-type music (beats split in three, written 9/8 or 12/8) from 2/4-3/4-4/4, and fast three-beat bars split in two become 3/8. (PM2S, a model that reads beats, bars and note values from a piano performance's notes, is installed for comparison but not used: on the 13 piano reference recordings it put 41% of the tune's notes exactly where the score has them, against 72% for Beat This! plus the rhythm reading below (better on 2 pieces), `bench/pm2s_results.md`. `SHEETSWAP_PIANO_BEATS=pm2s` switches it on for solo-piano analyses.)
 4. **Pick the tune**: the singing if there is any; the notes a pianist plays louder; otherwise the highest sensible line through the notes.
 5. **Fit it to the flute**: one octave move for the whole piece, then whole phrases moved where needed, never single notes.
 6. **Write the rhythm**: each beat is read as the most likely printed figure (two 8ths, dotted 8th + 16th, a 16th run, ...) given where the notes were played, learning the piece's own common figures; triplets only where the piece really uses them; notes held through short gaps; breath marks in long phrases.

@@ -9,11 +9,11 @@ from dataclasses import replace
 from statistics import median
 
 from .config import FLUTE_COMFY, FLUTE_HARD, TICKS_PER_BEAT
-from .model import QNote
+from .model import SIXTEENTH, QNote
 
 SWEET = 79                     # G5, the middle of the flute's best register
-EDGE_COST = 1                  # per tick in the hard range but not the comfortable one
-OUT_COST = 20                  # per tick outside the hard range
+EDGE_COST = 12                 # per quarter note in the hard range but not the comfortable one
+OUT_COST = 240                 # per quarter note outside the hard range
 CENTER_COST = 0.02             # per note, per semitone the median sits away from SWEET
 KEEP_SHARE = 0.9               # the octave option applies only if this share stays playable
 PHRASE_REST = TICKS_PER_BEAT   # default: a rest of a beat (ticks) or more ends a phrase
@@ -85,7 +85,7 @@ def _cost(line: list[QNote], shift: int) -> float:
     for n in line:
         p = n.pitch + shift
         if not lo <= p <= hi:
-            cost += n.dur * (EDGE_COST if _playable(p) else OUT_COST)
+            cost += n.dur * (EDGE_COST if _playable(p) else OUT_COST) / TICKS_PER_BEAT
     med = median(n.pitch for n in line) + shift
     return cost + CENTER_COST * abs(med - SWEET) * len(line)
 
@@ -260,7 +260,7 @@ def outline_leaps(line: list[QNote], fast: int = FAST) -> tuple[list[QNote], int
     moved = 0
     for i in range(1, len(out)):
         a, b = out[i - 1], out[i]
-        if b.start - a.end >= 3 or max(a.dur, b.dur) > fast:
+        if b.start - a.end >= SIXTEENTH or max(a.dur, b.dur) > fast:
             continue
         p = b.pitch
         while p - a.pitch > 12 and _playable(p - 12):

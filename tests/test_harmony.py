@@ -65,22 +65,22 @@ def _progression():
 
 
 def test_chords_c_g_progression():
-    rows = detect_chords(_progression(), _grid(), 24)
+    rows = detect_chords(_progression(), _grid(), 96)
     # same chord in both halves of a bar -> one row per bar
-    assert rows == [(0, 48, 0, "maj"), (48, 48, 7, "maj"),
-                    (96, 48, 9, "min"), (144, 48, 5, "maj")]
+    assert rows == [(0, 192, 0, "maj"), (192, 192, 7, "maj"),
+                    (384, 192, 9, "min"), (576, 192, 5, "maj")]
 
 
 def test_chords_change_mid_bar():
     notes = _triad(60, False, 0.0, 1.0) + _triad(55, False, 1.0, 2.0)
-    rows = detect_chords(notes, _grid(), 24)
-    assert rows == [(0, 24, 0, "maj"), (24, 24, 7, "maj")]
+    rows = detect_chords(notes, _grid(), 96)
+    assert rows == [(0, 96, 0, "maj"), (96, 96, 7, "maj")]
 
 
 def test_chords_silence_has_no_chord():
     notes = _triad(60, False, 0.0, 2.0) + _triad(57, True, 4.0, 6.0)
-    rows = detect_chords(notes, _grid(), 24)
-    assert rows == [(0, 48, 0, "maj"), (96, 48, 9, "min")]
+    rows = detect_chords(notes, _grid(), 96)
+    assert rows == [(0, 192, 0, "maj"), (384, 192, 9, "min")]
 
 
 def test_chords_follow_beats_not_seconds():
@@ -91,8 +91,8 @@ def test_chords_follow_beats_not_seconds():
         t += 0.5 + 0.3 * i / 15
     g = BeatGrid(beats, 4, 0)
     notes = _triad(60, False, beats[0], beats[4]) + _triad(55, False, beats[4], beats[8])
-    rows = detect_chords(notes, g, 24)
-    assert rows == [(0, 48, 0, "maj"), (48, 48, 7, "maj")]
+    rows = detect_chords(notes, g, 96)
+    assert rows == [(0, 192, 0, "maj"), (192, 192, 7, "maj")]
 
 
 # ---------------------------------------------------------------- chord choice
@@ -115,18 +115,18 @@ def test_tune_picks_between_chords_that_fit_alike():
     acc = [Note(64, 0.0, 2.0, 70), Note(67, 0.0, 2.0, 70)]
     for tune, chord in ((72, (0, "maj")), (71, (4, "min"))):     # C5 -> C, B4 -> Em
         for key in ((0, "major"), None):
-            rows = harmonize(acc, _grid(), melody=[QNote(tune, 0, 48)], key=key)
-            assert [(c.start, c.dur, c.root, c.quality) for c in rows] == [(0, 48, *chord)]
+            rows = harmonize(acc, _grid(), melody=[QNote(tune, 0, 192)], key=key)
+            assert [(c.start, c.dur, c.root, c.quality) for c in rows] == [(0, 192, *chord)]
 
 
 def test_maj7_alternation_over_g_and_d_bass():
     # Satie: G and D in the bass under B-D-F# and A-C#-F#: Gmaj7 / Dmaj7, never B minor
     notes, g = _waltz_maj7()
-    tune = [QNote(p, 12 * i, 12) for i, p in
+    tune = [QNote(p, 48 * i, 48) for i, p in
             enumerate([0, 78, 81, 79, 78, 73, 71, 73, 74, 69, 69, 69]) if p]
     for melody in (None, tune):
         rows = detect_chords(notes, g, melody=melody)
-        assert rows == [(36 * b, 36, 7 if b % 2 == 0 else 2, "maj7") for b in range(8)]
+        assert rows == [(144 * b, 144, 7 if b % 2 == 0 else 2, "maj7") for b in range(8)]
     chords = harmonize(notes, g)
     assert [c.bass for c in chords] == [7, 2] * 4                  # root position
 
@@ -134,25 +134,25 @@ def test_maj7_alternation_over_g_and_d_bass():
 def test_missing_third_follows_the_key():
     # A + E with no third: A minor in A minor, A major in A major
     fifth = [Note(45, 0.0, 2.0, 80), Note(52, 0.0, 2.0, 70)]
-    assert detect_chords(fifth, _grid(), key=(0, "minor")) == [(0, 48, 9, "min")]
-    assert detect_chords(fifth, _grid(), key=(3, "major")) == [(0, 48, 9, "maj")]
+    assert detect_chords(fifth, _grid(), key=(0, "minor")) == [(0, 192, 9, "min")]
+    assert detect_chords(fifth, _grid(), key=(3, "major")) == [(0, 192, 9, "maj")]
     # in context: Am, Dm, E, then the open fifth, with the key found from the notes
     notes = []
     for i, chord in enumerate([(57, 60, 64), (50, 53, 57), (52, 56, 59)]):
         notes += [Note(p, 2.0 * i, 2.0 * i + 2.0, 70) for p in chord]
         notes.append(Note(chord[0] - 12, 2.0 * i, 2.0 * i + 2.0, 80))
     notes += [Note(45, 6.0, 8.0, 80), Note(57, 6.0, 8.0, 70), Note(64, 6.0, 8.0, 70)]
-    assert detect_chords(notes, _grid()) == [(0, 48, 9, "min"), (48, 48, 2, "min"),
-                                             (96, 48, 4, "maj"), (144, 48, 9, "min")]
+    assert detect_chords(notes, _grid()) == [(0, 192, 9, "min"), (192, 192, 2, "min"),
+                                             (384, 192, 4, "maj"), (576, 192, 9, "min")]
 
 
 def test_seventh_only_when_it_sounds():
     # G B D F: G7; G B D alone stays a triad even with an F in the tune
     g7 = [Note(43, 0.0, 2.0, 80)] + [Note(p, 0.0, 2.0, 70) for p in (59, 62, 65)]
-    assert detect_chords(g7, _grid(), key=(0, "major")) == [(0, 48, 7, "7")]
+    assert detect_chords(g7, _grid(), key=(0, "major")) == [(0, 192, 7, "7")]
     g = [Note(43, 0.0, 2.0, 80)] + [Note(p, 0.0, 2.0, 70) for p in (59, 62, 67)]
-    rows = detect_chords(g, _grid(), melody=[QNote(77, 36, 12)], key=(0, "major"))
-    assert rows == [(0, 48, 7, "maj")]
+    rows = detect_chords(g, _grid(), melody=[QNote(77, 144, 48)], key=(0, "major"))
+    assert rows == [(0, 192, 7, "maj")]
 
 
 def test_inversion_from_the_bass():
@@ -168,11 +168,11 @@ def test_thin_accompaniment_harmonizes_the_tune():
     # a few stray notes are no accompaniment to follow: the tune gets diatonic
     # chords that hold its notes, V-I at the end
     tune = [76, 79, 84, 79, 77, 81, 84, 81, 74, 79, 83, 79, 72]
-    melody = [QNote(p, 12 * i, 12 if i < 12 else 48) for i, p in enumerate(tune)]
+    melody = [QNote(p, 48 * i, 48 if i < 12 else 192) for i, p in enumerate(tune)]
     for stray in ([Note(30, 0.1, 0.2, 40)], [Note(30, 0.1, 0.2, 40), Note(95, 3.1, 3.3, 40)]):
         rows = harmonize(stray, _grid(), melody=melody)
         assert [(c.start, c.root, c.quality) for c in rows] == [
-            (0, 0, "maj"), (48, 5, "maj"), (96, 7, "maj"), (144, 0, "maj")]
+            (0, 0, "maj"), (192, 5, "maj"), (384, 7, "maj"), (576, 0, "maj")]
     # noise (a cluster of every pitch class) is no accompaniment either
     noise = [Note(48 + i, 0.0, 8.0, 60) for i in range(12)]
     assert [(c.root, c.quality) for c in harmonize(noise, _grid(), melody=melody)] == [

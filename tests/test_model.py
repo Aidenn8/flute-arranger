@@ -10,7 +10,7 @@ def test_beatgrid_to_beats():
     assert g.to_beats(1.75) == 0.5
     assert g.to_beats(0.5) == -2
     assert g.to_beats(3.0) == 3
-    assert g.to_ticks(1.75) == 6
+    assert g.to_ticks(1.75) == 24
     assert abs(g.bpm() - 120) < 1e-9
 
 
@@ -65,24 +65,24 @@ def test_meter_choices():
 
 
 def test_time_signatures():
-    assert time_signature(4, 12) == (4, 4)
-    assert time_signature(3, 12) == (3, 4)
-    assert time_signature(2, 12) == (2, 4)
-    assert time_signature(2, 18) == (6, 8)
-    assert time_signature(3, 18) == (9, 8)
-    assert time_signature(4, 18) == (12, 8)
-    assert time_signature(1, 18) == (3, 8)            # one dotted beat a bar
-    assert time_signature(3, 6) == (3, 8)             # three 8th beats a bar
+    assert time_signature(4, 48) == (4, 4)
+    assert time_signature(3, 48) == (3, 4)
+    assert time_signature(2, 48) == (2, 4)
+    assert time_signature(2, 72) == (6, 8)
+    assert time_signature(3, 72) == (9, 8)
+    assert time_signature(4, 72) == (12, 8)
+    assert time_signature(1, 72) == (3, 8)            # one dotted beat a bar
+    assert time_signature(3, 24) == (3, 8)             # three 8th beats a bar
     for name, (bpb, unit) in METERS.items():
         assert "%d/%d" % time_signature(bpb, unit) == name
-    arr = Arrangement(flute=[], beats_per_bar=2, beat_ticks=18)
-    assert arr.time_signature == (6, 8) and arr.bar_ticks == 36
-    assert Arrangement(flute=[]).bar_ticks == 48
+    arr = Arrangement(flute=[], beats_per_bar=2, beat_ticks=72)
+    assert arr.time_signature == (6, 8) and arr.bar_ticks == 144
+    assert Arrangement(flute=[]).bar_ticks == 192
 
 
 def test_beat_ticks_scale_the_grid():
-    g = BeatGrid([0.0, 0.5, 1.0, 1.5], 2, 0, beat_ticks=18)
-    assert g.to_ticks(0.5) == 18 and g.to_ticks(0.25) == 9 and g.bar_ticks == 36
+    g = BeatGrid([0.0, 0.5, 1.0, 1.5], 2, 0, beat_ticks=72)
+    assert g.to_ticks(0.5) == 72 and g.to_ticks(0.25) == 36 and g.bar_ticks == 144
 
 
 def test_old_analysis_json_loads_with_quarter_beats(tmp_path):
@@ -93,7 +93,37 @@ def test_old_analysis_json_loads_with_quarter_beats(tmp_path):
     p = tmp_path / "analysis.json"
     p.write_text(json.dumps(old))
     a = Analysis.load(p)
-    assert a.grid.beat_ticks == 12 and a.grid.to_ticks(0.5) == 12
-    a.grid.beat_ticks = 18
+    assert a.grid.beat_ticks == 48 and a.grid.to_ticks(0.5) == 48
+    a.grid.beat_ticks = 72
     a.save(p)
-    assert Analysis.load(p).grid.beat_ticks == 18
+    assert Analysis.load(p).grid.beat_ticks == 72
+    assert json.loads(p.read_text())["ticks_per_beat"] == 48
+
+
+def test_old_twelve_tick_caches_load_on_the_finer_grid(tmp_path):
+    # analysis.json and score.json from before 48 ticks a quarter (12 a quarter then)
+    old = {"song_id": "abc", "kind": "piano", "duration": 3.0, "title": "Old",
+           "grid": {"beats": [0.0, 0.5, 1.0], "beats_per_bar": 2, "first_downbeat": 0,
+                    "beat_ticks": 18},
+           "sources": {"piano": [[60, 0.1, 0.6, 90]]}}
+    p = tmp_path / "analysis.json"
+    p.write_text(json.dumps(old))
+    g = Analysis.load(p).grid
+    assert g.beat_ticks == 72 and g.bar_ticks == 144 and g.to_ticks(0.5) == 72
+    old["grid"]["beat_ticks"] = 12
+    p.write_text(json.dumps(old))
+    assert Analysis.load(p).grid.beat_ticks == 48
+
+    from sheetswap.score_input import ScoreSource
+    part = {"name": "Flute", "instrument": "Flute", "staff": 0, "keyboard": False,
+            "melody": [[72, -3, 3, 80], [74, 0, 9, 80]], "notes": [[72, -3, 3], [74, 0, 9]],
+            "marks": [["slur", -3, 0, ""]], "warnings": [], "tune": False}
+    src = ScoreSource.from_dict({"format": 1, "parts": [part], "beats_per_bar": 2,
+                                 "beat_ticks": 18, "meter": "6/8", "pickup": 3})
+    q = src.parts[0].melody
+    assert [(n.start, n.dur) for n in q] == [(-12, 12), (0, 36)]
+    assert [(n.start, n.dur) for n in src.parts[0].notes] == [(-12, 12), (0, 36)]
+    assert (src.parts[0].marks[0].start, src.parts[0].marks[0].end) == (-12, 0)
+    assert (src.beat_ticks, src.pickup) == (72, 12)
+    again = ScoreSource.from_dict(src.to_dict())          # today's format is read as it is
+    assert again.to_dict() == src.to_dict()
