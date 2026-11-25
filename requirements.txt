@@ -16,3 +16,5 @@ pytest
 imageio-ffmpeg
 tinysoundfont  # install with --no-deps (pyaudio not needed)
 beat-this @ https://github.com/CPJKU/beat_this/archive/main.zip  # neural beat + downbeat tracker (approved 2026-11-24)
+oemer  # sheet-music reader (OMR) for screenshots; approved 2026-11-25
+opencv-python<4.11  # prebuilt for macOS 14 (5.x would compile from source)
