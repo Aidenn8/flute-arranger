@@ -37,7 +37,7 @@ BASS_WEIGHT = 1.5         # extra weight of low notes in the curve used to find 
 PHASE_TOL = 0.07          # beats: farther than this from all of them, an onset is ignored
 ALIGN_WINDOW = 0.2        # beats: onsets this close to a beat show how far the grid lags the tune
 COMPOUND_MIN_BEATS = 6    # beats split in three needed to call the music compound (6/8)...
-COMPOUND_SHARE = 0.6      # ...and their share of all the beats that split, in two or three
+COMPOUND_SHARE = 0.5      # ...and their share of all the beats that split, in two or three
 MELODY_MIN_SHARE = 0.4    # ...unless the tune alone splits fewer than this share in three
                           # (Ave Maria: a tune in 8ths over triplets stays 4/4; Chopin's
                           # Op. 9/2 tune alone is 0.57, its accompaniment makes it 12/8)

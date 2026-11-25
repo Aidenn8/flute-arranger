@@ -356,14 +356,18 @@ def test_fast_three_beat_bars_in_two_become_eighth_beats():
 
 
 def test_accompaniment_settles_an_ambiguous_tune():
-    # a 12/8 nocturne: the tune alone splits 39 beats in three, 29 in two
-    # (share 0.57, under COMPOUND_SHARE); the left hand's 8ths are in threes
+    # a compound tune that's ambiguous alone: 33 beats in three, 35 in two
+    # (share 0.49, under COMPOUND_SHARE); the left hand's 8ths are in threes
     from sheetswap.beats import COMPOUND_SHARE, _beat_splits, beat_subdivision, beat_unit
-    tune_pat = [(0, 1 / 3, 2 / 3)] * 39 + [(0, 1 / 2)] * 29 + [(0,)] * 12
+    tune_pat = [(0, 1 / 3, 2 / 3)] * 33 + [(0, 1 / 2)] * 35 + [(0,)] * 12
     tune, g = _tune(tune_pat, period=60 / 39.5, n_beats=len(tune_pat))
     [(three, two, _)] = _beat_splits([tune], g)
-    assert (three, two) == (39, 29) and three < COMPOUND_SHARE * (three + two)
+    assert (three, two) == (33, 35) and three < COMPOUND_SHARE * (three + two)
     assert beat_subdivision(tune, g) == 2
+    # the real Op. 9/2 tune (39 in three, 29 in two, share 0.57) is compound by itself
+    chopin, gc = _tune([(0, 1 / 3, 2 / 3)] * 39 + [(0, 1 / 2)] * 29 + [(0,)] * 12,
+                       period=60 / 39.5, n_beats=80)
+    assert beat_subdivision(chopin, gc) == 3
     left, _ = _tune([(0, 1 / 3, 2 / 3)], period=60 / 39.5, n_beats=len(tune_pat), seed=1)
     assert beat_subdivision(tune, g, accompaniment=left) == 3
     assert beat_unit(tune, g, left) == 18
