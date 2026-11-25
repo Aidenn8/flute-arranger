@@ -56,6 +56,14 @@ Measured on test music whose real melody is known (`bench/results.md`):
 | Singing (with vibrato) over piano and drums | 96% |
 | Piano plus a solo instrument (clarinet, violin) | 67% |
 
+And for the flute + piano parts together (`bench/music_audit.md`, which also checks the real recordings against the published melodies):
+
+| Test music | Flute notes clashing with the piano | Strong-beat flute notes inside the piano chord | Piano bass = real bass |
+|---|---|---|---|
+| Solo piano | 3.5% (was 19.8%) | 95% | 86% |
+| Piano plus a solo instrument | 6.1% (was 18.9%) | 92% | 85% |
+| Singing over piano and drums | 4.1% (was 15.4%) | 92% | 86% |
+
 On real recordings:
 - **Piano pieces played with a clear melody** (Satie's Gymnopédie No. 1, Chopin's Nocturne Op. 9 No. 2) come out right: it follows the notes the pianist plays louder, and stays quiet through a chords-only intro.
 - **Songs with singing** (tested on a soprano and a male singer with a band): the notes of the tune come out right, one note per sung syllable. Singers stretch the rhythm a lot, so turn on **Make it easier to play**: the anthem then reads in plain quarters, halves and 8ths.
@@ -64,7 +72,10 @@ On real recordings:
 
 It works best on recordings where the tune is clear: one main instrument or voice carrying it, not too much reverb.
 
-Known limits: MIDI files in 6/8, 2/4 or 12/8 are written in 4/4 (only 3/4 and 4/4 are supported); notes faster than about 1/7 s in a sung line are merged into their neighbours; a male voice that sits between two pitches can land a semitone off.
+Known limits:
+- Only 3/4 and 4/4: music in 3/8, 6/8 or 12/8 (Für Elise, Chopin's Nocturne) is written in 4/4, so it reads busier than the printed music.
+- Bar lines are placed where the tune's long notes fall (right in about 60% of the test pieces, up from about 25%); very slow, freely played piano (Gymnopédie) can drift a beat. Use **Bar lines** when the strong beats sit in the wrong place.
+- Notes faster than about 1/7 s in a sung line are merged into their neighbours; a male voice that sits between two pitches can land a semitone off.
 
 ## Setting it up from scratch
 

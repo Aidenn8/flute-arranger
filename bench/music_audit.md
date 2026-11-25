@@ -270,114 +270,114 @@ What the tables say:
 
 | song | options | printed | tune notes found | intervals exact | same rhythm (±16th) | tempo factor | bar lines | wrong / missing / extra |
 |---|---|---|---|---|---|---|---|---|
-| Satie, Gymnopédie No. 1 | meter=3 | 3/4 87 bpm | 100.0% of 22 | 95.2% | 81.0% (95.2%) | 1.0 | right for 45.5% of notes; +1 beat: 45.5%, +2.75 beat: 9.1% | 0 / 0 / 1 |
-| Satie, Gymnopédie No. 1 | meter=3, simple=True | 3/4 87 bpm | 100.0% of 22 | 95.2% | 95.2% (95.2%) | 1.0 | right for 54.5% of notes; +1 beat: 45.5% | 0 / 0 / 1 |
-| Beethoven, Für Elise | meter=3 | 3/4 152 bpm | 77.1% of 35 | 70.0% | 0.0% (50.0%) | 1.5 | printed 3/4 bar = 2 tune eighths, real bar = 3 | 7 / 1 / 19 |
-| Beethoven, Für Elise | meter=3, simple=True | 3/4 152 bpm | 77.1% of 35 | 70.0% | 0.0% (55.0%) | 1.5 | printed 3/4 bar = 2 tune eighths, real bar = 3 | 7 / 1 / 19 |
-| Chopin, Nocturne Op. 9 No. 2 | defaults | 4/4 119 bpm | 100.0% of 29 | 92.9% | 7.7% (38.5%) | 1.5 | printed 4/4 bar = 2.66667 tune eighths, real bar = 12 | 0 / 0 / 4 |
-| Chopin, Nocturne Op. 9 No. 2 | simple=True | 4/4 119 bpm | 100.0% of 29 | 92.9% | 46.2% (46.2%) | 1.0 | printed 4/4 bar = 4 tune eighths, real bar = 12 | 0 / 0 / 4 |
-| Star-Spangled Banner (soprano + band) | meter=3 | 3/4 145 bpm | 96.0% of 50 | 100.0% | 22.2% (68.9%) | 2.0 | printed 3/4 bar = 1.5 tune quarters, real bar = 3 | 1 / 1 / 2 |
+| Satie, Gymnopédie No. 1 | meter=3 | 3/4 87 bpm | 100.0% of 22 | 95.2% | 90.5% (90.5%) | 1.0 | right for 40.9% of notes; +1 beat: 59.1% | 0 / 0 / 0 |
+| Satie, Gymnopédie No. 1 | meter=3, simple=True | 3/4 87 bpm | 100.0% of 22 | 95.2% | 90.5% (90.5%) | 1.0 | right for 40.9% of notes; +1 beat: 59.1% | 0 / 0 / 0 |
+| Beethoven, Für Elise | meter=3 | 3/4 152 bpm | 74.3% of 35 | 72.2% | 16.7% (55.6%) | 1.5 | printed 3/4 bar = 2 tune eighths, real bar = 3 | 8 / 1 / 13 |
+| Beethoven, Für Elise | meter=3, simple=True | 3/4 152 bpm | 74.3% of 35 | 72.2% | 0.0% (61.1%) | 1.5 | printed 3/4 bar = 2 tune eighths, real bar = 3 | 8 / 1 / 13 |
+| Chopin, Nocturne Op. 9 No. 2 | defaults | 4/4 119 bpm | 100.0% of 29 | 100.0% | 46.2% (53.8%) | 1.0 | printed 4/4 bar = 4 tune eighths, real bar = 12 | 0 / 0 / 2 |
+| Chopin, Nocturne Op. 9 No. 2 | simple=True | 4/4 119 bpm | 100.0% of 29 | 100.0% | 46.2% (46.2%) | 1.0 | printed 4/4 bar = 4 tune eighths, real bar = 12 | 0 / 0 / 2 |
+| Star-Spangled Banner (soprano + band) | meter=3 | 3/4 145 bpm | 96.0% of 50 | 100.0% | 44.4% (48.9%) | 2.0 | printed 3/4 bar = 1.5 tune quarters, real bar = 3 | 1 / 1 / 2 |
 | Star-Spangled Banner (soprano + band) | meter=3, simple=True | 3/4 145 bpm | 96.0% of 50 | 100.0% | 46.7% (46.7%) | 2.0 | printed 3/4 bar = 1.5 tune quarters, real bar = 3 | 1 / 1 / 2 |
-| Star-Spangled Banner (soprano + band) | meter=3, tempo=-1 | 3/4 73 bpm | 96.0% of 50 | 100.0% | 44.4% (86.7%) | 1.0 | right for 0.0% of notes; +1.5 beat: 25.0%, +1.25 beat: 20.8%, +2.25 beat: 10.4% | 1 / 1 / 2 |
-| America the Beautiful (male voice + band) | defaults | 4/4 123 bpm | 83.9% of 56 | 100.0% | 9.8% (22.0%) | 3.0 | printed 4/4 bar = 1.33333 tune quarters, real bar = 4 | 5 / 4 / 17 |
+| Star-Spangled Banner (soprano + band) | meter=3, tempo=-1 | 3/4 73 bpm | 96.0% of 50 | 100.0% | 46.7% (82.2%) | 1.0 | right for 0.0% of notes; +1.5 beat: 31.2%, +1 beat: 18.8%, +1.25 beat: 10.4% | 1 / 1 / 2 |
+| America the Beautiful (male voice + band) | defaults | 4/4 123 bpm | 83.9% of 56 | 100.0% | 24.4% (24.4%) | 3.0 | printed 4/4 bar = 1.33333 tune quarters, real bar = 4 | 5 / 4 / 17 |
 | America the Beautiful (male voice + band) | simple=True | 4/4 123 bpm | 83.9% of 56 | 100.0% | 24.4% (24.4%) | 3.0 | printed 4/4 bar = 1.33333 tune quarters, real bar = 4 | 5 / 4 / 16 |
 
 ### Real recordings: harmony (flute + piano, main option set)
 
 | song | strong-beat flute notes in the piano chord | clashes vs piano | clashes vs original | tritone on bass | chords in key | bass 7th leaps | cadences I/V | chord notes in original | bass = original | flute bars with no piano |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Satie, Gymnopédie No. 1 | 69.2% | 16.4% | 19.3% | 0.9% | 75.0% | 0.0% | 60.0% of 10 | 95.8% | 49.4% | 0.0% |
-| Beethoven, Für Elise | 50.0% | 31.1% | 28.7% | 4.3% | 85.6% | 2.0% | 83.3% of 12 | 86.4% | 52.8% | 0.0% |
-| Chopin, Nocturne Op. 9 No. 2 | 58.1% | 18.7% | 21.5% | 2.8% | 65.5% | 4.5% | 45.5% of 11 | 90.1% | 57.4% | 0.0% |
-| Star-Spangled Banner (soprano + band) | 50.0% | 24.1% | 10.7% | 1.4% | 71.7% | 2.1% | 28.6% of 7 | 40.0% | 50.0% | 12.9% |
-| America the Beautiful (male voice + band) | 58.6% | 18.3% | 13.4% | 5.1% | 53.6% | 1.2% | 25.0% of 16 | 79.5% | 73.1% | 2.2% |
+| Satie, Gymnopédie No. 1 | 75.0% | 14.8% | 19.5% | 1.7% | 88.5% | 0.0% | 66.7% of 9 | 91.8% | 76.5% | 0.0% |
+| Beethoven, Für Elise | 70.5% | 17.1% | 25.2% | 6.6% | 93.7% | 1.1% | 71.4% of 14 | 79.7% | 92.1% | 0.0% |
+| Chopin, Nocturne Op. 9 No. 2 | 73.7% | 13.4% | 21.6% | 2.2% | 75.2% | 3.9% | 42.9% of 7 | 87.2% | 88.1% | 0.0% |
+| Star-Spangled Banner (soprano + band) | 92.3% | 4.4% | 9.4% | 1.1% | 98.0% | 0.0% | 100.0% of 7 | 34.8% | 25.0% | 3.2% |
+| America the Beautiful (male voice + band) | 76.6% | 12.7% | 13.8% | 4.3% | 62.3% | 3.7% | 20.0% of 15 | 77.6% | 92.6% | 2.2% |
 
 ### Real recordings: reading and playing the flute part
 
 | song | options | notes/bar | ties/bar | tied 16th stubs/bar | < 8th | dotted | off-beat across beat | short rests in phrases/bar | accidentals/bar | range | longest without breath | leaps > 8ve/min |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Satie, Gymnopédie No. 1 | meter=3 | 2.16 | 0.57 | 0.23 | 10.8% | 16.9% | 10.7% | 0.0 | 0.21 | D4–A5 | 8.3 s | 0.68 |
-| Satie, Gymnopédie No. 1 | meter=3, simple=True | 1.94 | 0.35 | 0.0 | 0.0% | 14.8% | 2.5% | 0.0 | 0.21 | D4–A5 | 8.3 s | 0.68 |
-| Beethoven, Für Elise | meter=3 | 2.84 | 1.06 | 0.77 | 33.2% | 17.9% | 32.8% | 0.0 | 0.35 | C4–Bb6 | 4.5 s | 1.54 |
-| Beethoven, Für Elise | meter=3, simple=True | 2.28 | 0.44 | 0.0 | 0.0% | 8.9% | 7.9% | 0.0 | 0.38 | C4–Bb6 | 4.5 s | 1.93 |
-| Chopin, Nocturne Op. 9 No. 2 | defaults | 4.0 | 1.49 | 0.89 | 27.2% | 23.0% | 34.2% | 0.0 | 0.4 | Eb4–C7 | 7.8 s | 2.76 |
-| Chopin, Nocturne Op. 9 No. 2 | simple=True | 3.09 | 0.7 | 0.0 | 0.0% | 13.4% | 15.6% | 0.0 | 0.4 | Eb4–C7 | 7.8 s | 3.0 |
-| Star-Spangled Banner (soprano + band) | meter=3 | 3.31 | 1.74 | 0.87 | 26.7% | 28.0% | 66.4% | 0.0 | 0.09 | C5–G6 | 4.3 s | 0.0 |
+| Satie, Gymnopédie No. 1 | meter=3 | 1.99 | 0.4 | 0.05 | 2.6% | 16.3% | 2.5% | 0.0 | 0.21 | D4–A5 | 8.3 s | 0.34 |
+| Satie, Gymnopédie No. 1 | meter=3, simple=True | 1.95 | 0.36 | 0.0 | 0.0% | 14.7% | 2.5% | 0.0 | 0.21 | D4–A5 | 8.3 s | 0.34 |
+| Beethoven, Für Elise | meter=3 | 3.04 | 0.92 | 0.63 | 26.9% | 16.8% | 27.0% | 0.0 | 0.36 | G4–E6 | 4.5 s | 0.0 |
+| Beethoven, Für Elise | meter=3, simple=True | 2.54 | 0.45 | 0.0 | 0.0% | 10.3% | 10.4% | 0.0 | 0.37 | G4–E6 | 4.7 s | 0.0 |
+| Chopin, Nocturne Op. 9 No. 2 | defaults | 3.54 | 1.01 | 0.4 | 16.6% | 17.7% | 21.3% | 0.0 | 0.4 | Eb4–C7 | 6.6 s | 0.69 |
+| Chopin, Nocturne Op. 9 No. 2 | simple=True | 3.13 | 0.71 | 0.0 | 0.0% | 12.7% | 14.8% | 0.0 | 0.39 | Eb4–C7 | 6.6 s | 0.69 |
+| Star-Spangled Banner (soprano + band) | meter=3 | 2.68 | 1.1 | 0.16 | 6.6% | 23.6% | 51.4% | 0.0 | 0.09 | C5–G6 | 4.4 s | 0.0 |
 | Star-Spangled Banner (soprano + band) | meter=3, simple=True | 2.57 | 1.0 | 0.0 | 0.0% | 22.9% | 49.5% | 0.0 | 0.09 | C5–G6 | 4.3 s | 0.0 |
-| Star-Spangled Banner (soprano + band) | meter=3, tempo=-1 | 5.26 | 2.12 | 1.71 | 39.7% | 21.8% | 52.3% | 0.0 | 0.18 | C5–G6 | 7.2 s | 0.0 |
-| America the Beautiful (male voice + band) | defaults | 3.91 | 1.88 | 1.02 | 28.7% | 26.3% | 55.2% | 0.0 | 0.57 | C4–C7 | 13.0 s | 1.69 |
-| America the Beautiful (male voice + band) | simple=True | 2.97 | 0.95 | 0.0 | 0.0% | 17.2% | 32.9% | 0.0 | 0.57 | C4–C7 | 12.9 s | 1.13 |
+| Star-Spangled Banner (soprano + band) | meter=3, tempo=-1 | 4.47 | 1.32 | 0.82 | 28.9% | 15.1% | 36.4% | 0.0 | 0.18 | C5–G6 | 7.2 s | 0.0 |
+| America the Beautiful (male voice + band) | defaults | 3.33 | 1.25 | 0.41 | 15.6% | 20.9% | 39.2% | 0.0 | 0.56 | C4–C7 | 13.0 s | 0.85 |
+| America the Beautiful (male voice + band) | simple=True | 2.94 | 0.88 | 0.0 | 0.0% | 20.7% | 32.9% | 0.0 | 0.55 | C4–C7 | 12.9 s | 1.13 |
 
 ### Real recordings: how the preview sounds next to the original
 
 | song | chroma sim, DTW (null) | chroma sim, beat grid (null) | flute pitch = loudest in original | flute pitch in top 3 | vs vocal stem top 1 / top 3 | flute − piano (frames piano louder) | peak / clipped |
 |---|---|---|---|---|---|---|---|
-| Satie, Gymnopédie No. 1 | 0.794 (0.682) | 0.696 (0.404) | 57.8% | 96.0% | – | 18.7 dB (2.7%) | -1.53 dBFS / 0 |
-| Beethoven, Für Elise | 0.821 (0.788) | 0.698 (0.545) | 24.8% | 68.7% | – | 11.0 dB (11.8%) | -1.4 dBFS / 0 |
-| Chopin, Nocturne Op. 9 No. 2 | 0.79 (0.739) | 0.689 (0.454) | 38.6% | 82.8% | – | 15.3 dB (1.9%) | -1.49 dBFS / 0 |
-| Star-Spangled Banner (soprano + band) | 0.81 (0.663) | 0.762 (0.345) | 94.9% | 99.6% | 94.9% / 99.6% | 13.7 dB (2.8%) | -1.53 dBFS / 0 |
-| America the Beautiful (male voice + band) | 0.835 (0.708) | 0.766 (0.471) | 60.3% | 93.3% | 86.4% / 96.9% | 13.2 dB (4.1%) | -1.36 dBFS / 0 |
+| Satie, Gymnopédie No. 1 | 0.856 (0.698) | 0.788 (0.465) | 59.0% | 96.1% | – | 8.4 dB (14.3%) | -1.45 dBFS / 0 |
+| Beethoven, Für Elise | 0.84 (0.797) | 0.77 (0.574) | 25.6% | 70.4% | – | 3.3 dB (28.5%) | -1.57 dBFS / 0 |
+| Chopin, Nocturne Op. 9 No. 2 | 0.855 (0.78) | 0.785 (0.514) | 39.5% | 84.3% | – | 7.2 dB (13.0%) | -1.49 dBFS / 0 |
+| Star-Spangled Banner (soprano + band) | 0.769 (0.693) | 0.714 (0.415) | 95.2% | 99.5% | 95.2% / 99.5% | 6.5 dB (11.2%) | -1.54 dBFS / 0 |
+| America the Beautiful (male voice + band) | 0.863 (0.729) | 0.804 (0.5) | 61.2% | 93.1% | 87.5% / 97.4% | 7.5 dB (14.6%) | -1.54 dBFS / 0 |
 
 Examples (main option set):
 
-- **Satie, Gymnopédie No. 1** (tune found from bar 6.3, transposed 0): bar 21.1: F#5->E4 (-14) where the tune goes -2. Clashes on strong beats: bar 8.1: flute C#5 on D2/D4; bar 16.1: flute G5 on F#3; bar 50.1: flute G5 on F#3. Bass 7th leaps: none. Longest breathless stretch 8.3 s at bars 6.3-10.3.
-- **Beethoven, Für Elise** (tune found from bar 11.2.25, transposed 0): bar 18.3.5: A expected, B4 written; bar 20.1: A expected, F5 written; bar 23.2.75: Ab expected, E6 written; A (tune note 30) missing before bar 44.1.25; bar 23.1.75: B4->E5 (+5) where the tune goes -7; bar 29.3: C5->E5 (+4) where the tune goes -8. Clashes on strong beats: bar 7.1: flute Eb5 on E4; bar 50.1: flute A5 on Bb2/Bb3; bar 51.1: flute Bb4 on A3. Bass 7th leaps: C2->B2. Longest breathless stretch 4.5 s at bars 121.1-124.3.5.
-- **Chopin, Nocturne Op. 9 No. 2** (tune found from bar 1.1, transposed 0): bar 9.3: F5->G4 (-10) where the tune goes +2; bar 9.3.75: G4->D5 (+7) where the tune goes -5. Clashes on strong beats: bar 4.1: flute Eb5 on D4; bar 7.3: flute Ab5 on A3; bar 12.1: flute D6 on Eb2/Eb4. Bass 7th leaps: C2->Bb2, C2->Bb2, C2->Bb2, Bb2->C2. Longest breathless stretch 7.8 s at bars 52.1-55.4.5.
-- **Star-Spangled Banner (soprano + band)** (tune found from bar 1.3.5, transposed 0): bar 30.1: C expected, B5 written; C (tune note 21) missing before bar 13.2.25. Clashes on strong beats: bar 22.1: flute C6 on B3; bar 26.1: flute E6 on F3; bar 30.1: flute B5 on C2/C4. Bass 7th leaps: C2->B2. Longest breathless stretch 4.3 s at bars 21.2.25-24.3.75.
-- **America the Beautiful (male voice + band)** (tune found from bar 11.1.5, transposed 8): bar 16.2.25: Bb expected, C5 written; bar 16.4.75: Bb expected, Ab4 written; bar 26.2: Bb expected, B4 written; C (tune note 30) missing before bar 33.1.25; Bb (tune note 38) missing before bar 38.4.25. Clashes on strong beats: bar 17.1: flute C5 on C#2/C#4; bar 26.3: flute A4 on Bb3; bar 55.3: flute G5 on Ab3. Bass 7th leaps: C2->B2. Longest breathless stretch 13.0 s at bars 102.2.75-109.1.5.
+- **Satie, Gymnopédie No. 1** (tune found from bar 48.2, transposed 0): bar 62.2: F#5->E4 (-14) where the tune goes -2. Clashes on strong beats: bar 7.1: flute C#5 on D2; bar 15.1: flute G5 on F#3; bar 49.1: flute G5 on F#3. Bass 7th leaps: none. Longest breathless stretch 8.3 s at bars 5.3-9.3.
+- **Beethoven, Für Elise** (tune found from bar 21.2, transposed 0): bar 21.2.75: Eb expected, E5 written; bar 23.2: Eb expected, E5 written; bar 28.3.5: A expected, C5 written; A (tune note 30) missing before bar 42.2.25; bar 26.3.5: A4->C5 (+3) where the tune goes -9; bar 32.1: B4->E5 (+5) where the tune goes -7. Clashes on strong beats: bar 5.1: flute Eb5 on E4; bar 42.1: flute Eb5 on E2/E4; bar 47.1: flute F5 on E4. Bass 7th leaps: B2->C2. Longest breathless stretch 4.5 s at bars 81.2.5-85.2.
+- **Chopin, Nocturne Op. 9 No. 2** (tune found from bar 1.1, transposed 0): . Clashes on strong beats: bar 4.1: flute Eb5 on D4; bar 22.1: flute G5 on Ab3; bar 29.3: flute D5 on Eb2/Eb4. Bass 7th leaps: B2->C2, B2->C2, Bb2->C2, C2->Bb2. Longest breathless stretch 6.6 s at bars 61.4-65.1.
+- **Star-Spangled Banner (soprano + band)** (tune found from bar 1.3.5, transposed 0): bar 30.1: C expected, B5 written; C (tune note 21) missing before bar 13.2.5. Clashes on strong beats: bar 30.1: flute B5 on C2/C4. Bass 7th leaps: none. Longest breathless stretch 4.4 s at bars 21.2-24.3.75.
+- **America the Beautiful (male voice + band)** (tune found from bar 10.4.5, transposed 8): bar 16.1.5: Bb expected, C5 written; bar 16.3.75: Bb expected, Ab4 written; bar 26.1: Bb expected, B4 written; C (tune note 30) missing before bar 32.4; Bb (tune note 38) missing before bar 38.3. Clashes on strong beats: bar 26.1: flute B4 on Bb3; bar 43.1: flute G5 on Ab2/Ab3; bar 46.3: flute E5 on F4. Bass 7th leaps: Bb2->C2, C2->Bb2, C2->B2. Longest breathless stretch 13.0 s at bars 102.1.75-108.4.5.
 
 ### Test music (true melody and true chords known), default options
 
 | set | pieces | tune notes found | intervals exact | same rhythm (±16th) | meter right | tempo right | true downbeats on bar lines | strong-beat flute notes in the piano chord | clashes vs piano | clashes vs real chords | chord notes in real chord | bass = real bass | ties/bar | < 8th | longest without breath | chroma sim grid (null) | flute − piano |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| A (piano) | 12 | 89.2% | 99.8% | 96.3% (96.3%) | 11/12 | 12/12 | 27.3% | 58.4% | 19.8% | 5.6% | 90.3% | 39.2% | 0.1 | 1.6% | 7.2 s | 0.649 (0.46) | 15.3 dB |
-| B (piano + clarinet/violin) | 12 | 83.2% | 99.7% | 56.0% (71.5%) | 10/12 | 11/12 | 20.8% | 64.3% | 18.9% | 6.6% | 89.0% | 42.5% | 0.3 | 20.5% | 7.5 s | 0.752 (0.485) | 14.4 dB |
-| C (broken chords) | 3 | 98.7% | 100.0% | 98.5% (98.5%) | 3/3 | 2/3 | 33.3% | 46.4% | 30.7% | 3.0% | 71.4% | 29.8% | 0.1 | 0.5% | 6.2 s | 0.702 (0.406) | 12.1 dB |
-| D (sung + drums) | 12 | 96.6% | 100.0% | 88.9% (95.1%) | 11/12 | 7/12 | 18.9% | 66.6% | 15.4% | 5.6% | 83.9% | 55.9% | 0.3 | 5.0% | 6.1 s | 0.749 (0.522) | 13.4 dB |
+| A (piano) | 12 | 89.2% | 99.8% | 96.3% (96.3%) | 11/12 | 12/12 | 60.6% | 94.6% | 3.5% | 5.5% | 83.4% | 86.1% | 0.0 | 1.6% | 7.3 s | 0.785 (0.515) | 5.9 dB |
+| B (piano + clarinet/violin) | 12 | 83.2% | 99.7% | 56.0% (71.3%) | 10/12 | 11/12 | 19.4% | 92.2% | 6.1% | 6.6% | 82.9% | 84.9% | 0.2 | 20.2% | 7.2 s | 0.843 (0.532) | 5.2 dB |
+| C (broken chords) | 3 | 98.7% | 100.0% | 98.5% (98.5%) | 3/3 | 2/3 | 66.7% | 81.4% | 6.2% | 3.0% | 65.9% | 67.2% | 0.0 | 0.0% | 6.2 s | 0.751 (0.445) | 4.4 dB |
+| D (sung + drums) | 12 | 96.6% | 100.0% | 93.3% (94.2%) | 11/12 | 7/12 | 60.6% | 92.2% | 4.1% | 5.5% | 80.2% | 86.0% | 0.2 | 1.4% | 5.9 s | 0.835 (0.587) | 4.7 dB |
 
 <details><summary>Per piece</summary>
 
 | piece | printed | real | tune found | intervals | rhythm ±16th | downbeats on bar lines | clashes piano / real | bass = real | ties/bar |
 |---|---|---|---|---|---|---|---|---|---|
-| A_bwv66_6 | 4/4 77 | 4/4 x1.0 | 94.4% | 100.0% | 87.1% | 0.0% | 21.5% / 1.5% | 16.7% | 0.11 |
-| A_bwv269 | 3/4 98 | 3/4 x1.0 | 91.3% | 100.0% | 100.0% | 0.0% | 11.8% / 1.8% | 28.6% | 0.24 |
-| A_bwv347 | 4/4 89 | 4/4 x1.0 | 96.2% | 100.0% | 100.0% | 0.0% | 15.3% / 5.8% | 26.9% | 0.23 |
-| A_bwv153_1 | 4/4 80 | 4/4 x1.0 | 100.0% | 100.0% | 95.7% | 0.0% | 32.7% / 3.5% | 25.0% | 0.0 |
-| A_bwv86_6 | 4/4 93 | 4/4 x1.0 | 86.0% | 100.0% | 96.8% | 0.0% | 23.1% / 7.5% | 65.0% | 0.0 |
-| A_bwv267 | 4/4 84 | 4/4 x1.0 | 92.3% | 100.0% | 98.5% | 100.0% | 13.8% / 6.2% | 38.2% | 0.06 |
-| A_bwv40_8 | 4/4 86 | 4/4 x1.0 | 67.1% | 97.4% | 94.7% | 100.0% | 1.5% / 4.0% | 77.5% | 0.15 |
-| A_bwv244_37 | 4/4 73 | 4/4 x1.0 | 79.2% | 100.0% | 90.9% | 0.0% | 30.1% / 12.2% | 29.2% | 0.08 |
-| A_bwv26_6 | 4/4 82 | 4/4 x1.0 | 95.0% | 100.0% | 97.1% | 100.0% | 12.9% / 2.7% | 50.0% | 0.0 |
-| A_bwv64_2 | 3/4 93 | 4/4 x1.0 | 89.5% | 100.0% | 100.0% | 27.3% | 17.9% / 6.6% | 35.7% | 0.0 |
-| A_bwv2_6 | 4/4 92 | 4/4 x1.0 | 90.9% | 100.0% | 100.0% | 0.0% | 32.3% / 9.0% | 36.4% | 0.18 |
-| A_bwv101_7 | 4/4 80 | 4/4 x1.0 | 88.0% | 100.0% | 95.0% | 0.0% | 24.2% / 6.1% | 41.7% | 0.0 |
-| B_bwv66_6 | 4/4 77 | 4/4 x1.0 | 52.8% | 100.0% | 64.3% | 0.0% | 31.1% / 13.7% | 22.2% | 0.11 |
-| B_bwv269 | 4/4 98 | 3/4 x1.0 | 89.1% | 100.0% | 80.0% | 22.7% | 12.4% / 5.2% | 40.6% | 1.0 |
-| B_bwv347 | 4/4 89 | 4/4 x1.0 | 62.3% | 100.0% | 89.5% | 0.0% | 19.4% / 5.3% | 23.1% | 0.0 |
-| B_bwv153_1 | 4/4 80 | 4/4 x1.0 | 100.0% | 100.0% | 71.7% | 0.0% | 28.2% / 3.9% | 25.0% | 0.18 |
-| B_bwv86_6 | 4/4 93 | 4/4 x1.0 | 72.1% | 100.0% | 87.0% | 0.0% | 22.5% / 11.2% | 65.0% | 0.1 |
-| B_bwv267 | 4/4 84 | 4/4 x1.0 | 100.0% | 100.0% | 63.6% | 0.0% | 23.9% / 6.5% | 35.3% | 0.17 |
-| B_bwv40_8 | 4/4 86 | 4/4 x1.0 | 73.7% | 100.0% | 82.2% | 100.0% | 2.9% / 3.1% | 70.0% | 0.05 |
-| B_bwv244_37 | 4/4 147 | 4/4 x2.01 | 98.1% | 96.0% | 52.0% | 0.0% | 9.3% / 9.9% | 68.8% | 0.75 |
-| B_bwv26_6 | 4/4 82 | 4/4 x1.0 | 57.5% | 100.0% | 80.0% | 100.0% | 5.4% / 2.2% | 45.0% | 0.11 |
-| B_bwv64_2 | 3/4 93 | 4/4 x1.0 | 100.0% | 100.0% | 32.4% | 27.3% | 6.5% / 5.2% | 50.0% | 0.07 |
-| B_bwv2_6 | 4/4 92 | 4/4 x1.0 | 93.2% | 100.0% | 94.6% | 0.0% | 37.7% / 5.6% | 36.4% | 0.27 |
-| B_bwv101_7 | 4/4 80 | 4/4 x1.0 | 100.0% | 100.0% | 61.2% | 0.0% | 27.0% / 7.0% | 29.2% | 0.31 |
-| C_bwv104_6_arp | 4/4 78 | 4/4 x1.0 | 100.0% | 100.0% | 95.6% | 0.0% | 33.2% / 6.4% | 36.8% | 0.0 |
-| C_bwv108_6_arp | 4/4 144 | 4/4 x2.0 | 98.4% | 100.0% | 100.0% | 0.0% | 33.1% / 1.4% | 48.1% | 0.19 |
-| C_bwv113_8_arp | 4/4 96 | 4/4 x1.0 | 97.7% | 100.0% | 100.0% | 100.0% | 25.9% / 1.1% | 4.5% | 0.0 |
-| D_bwv66_6 | 4/4 154 | 4/4 x2.0 | 100.0% | 100.0% | 100.0% | 0.0% | 16.0% / 1.9% | 58.3% | 0.26 |
-| D_bwv269 | 4/4 98 | 3/4 x1.0 | 100.0% | 100.0% | 100.0% | 27.3% | 11.7% / 2.3% | 37.5% | 0.44 |
-| D_bwv347 | 4/4 89 | 4/4 x1.0 | 98.1% | 100.0% | 98.0% | 0.0% | 15.5% / 7.1% | 34.6% | 0.21 |
-| D_bwv153_1 | 4/4 160 | 4/4 x2.0 | 95.7% | 100.0% | 95.2% | 0.0% | 22.2% / 3.3% | 70.0% | 0.52 |
-| D_bwv86_6 | 4/4 93 | 4/4 x1.0 | 97.7% | 100.0% | 97.5% | 0.0% | 18.1% / 7.9% | 45.0% | 0.18 |
-| D_bwv267 | 4/4 84 | 4/4 x1.0 | 97.4% | 100.0% | 98.6% | 0.0% | 22.2% / 6.9% | 35.3% | 0.33 |
-| D_bwv40_8 | 4/4 86 | 4/4 x1.0 | 94.7% | 100.0% | 94.0% | 100.0% | 5.7% / 5.4% | 75.0% | 0.24 |
-| D_bwv244_37 | 4/4 147 | 4/4 x2.01 | 98.1% | 100.0% | 94.0% | 0.0% | 7.4% / 10.4% | 75.0% | 0.28 |
-| D_bwv26_6 | 4/4 164 | 4/4 x2.0 | 85.0% | 100.0% | 85.2% | 100.0% | 14.2% / 3.9% | 82.5% | 0.67 |
-| D_bwv64_2 | 4/4 93 | 4/4 x1.0 | 97.4% | 100.0% | 91.7% | 0.0% | 8.9% / 5.3% | 47.6% | 0.09 |
-| D_bwv2_6 | 4/4 92 | 4/4 x1.0 | 97.7% | 100.0% | 97.6% | 0.0% | 31.9% / 7.4% | 27.3% | 0.25 |
-| D_bwv101_7 | 4/4 160 | 4/4 x2.0 | 98.0% | 100.0% | 89.4% | 0.0% | 11.4% / 5.8% | 83.3% | 0.36 |
+| A_bwv66_6 | 4/4 77 | 4/4 x1.0 | 94.4% | 100.0% | 87.1% | 0.0% | 0.0% / 1.4% | 90.9% | 0.0 |
+| A_bwv269 | 3/4 98 | 3/4 x1.0 | 91.3% | 100.0% | 100.0% | 100.0% | 1.4% / 1.9% | 91.9% | 0.09 |
+| A_bwv347 | 4/4 89 | 4/4 x1.0 | 96.2% | 100.0% | 100.0% | 100.0% | 3.7% / 5.5% | 88.2% | 0.07 |
+| A_bwv153_1 | 4/4 80 | 4/4 x1.0 | 100.0% | 100.0% | 95.7% | 0.0% | 4.5% / 3.5% | 77.5% | 0.0 |
+| A_bwv86_6 | 4/4 93 | 4/4 x1.0 | 86.0% | 100.0% | 96.8% | 100.0% | 6.5% / 8.0% | 87.2% | 0.0 |
+| A_bwv267 | 4/4 84 | 4/4 x1.0 | 92.3% | 100.0% | 98.5% | 100.0% | 6.4% / 6.2% | 79.1% | 0.06 |
+| A_bwv40_8 | 4/4 86 | 4/4 x1.0 | 67.1% | 97.4% | 94.7% | 100.0% | 1.3% / 4.0% | 87.5% | 0.15 |
+| A_bwv244_37 | 4/4 73 | 4/4 x1.0 | 79.2% | 100.0% | 90.9% | 100.0% | 8.9% / 12.0% | 85.1% | 0.15 |
+| A_bwv26_6 | 4/4 82 | 4/4 x1.0 | 95.0% | 100.0% | 97.1% | 0.0% | 0.8% / 2.7% | 84.2% | 0.0 |
+| A_bwv64_2 | 3/4 93 | 4/4 x1.0 | 89.5% | 100.0% | 100.0% | 27.3% | 3.0% / 6.6% | 90.2% | 0.0 |
+| A_bwv2_6 | 4/4 92 | 4/4 x1.0 | 90.9% | 100.0% | 100.0% | 100.0% | 5.3% / 8.0% | 75.0% | 0.08 |
+| A_bwv101_7 | 4/4 80 | 4/4 x1.0 | 88.0% | 100.0% | 95.0% | 0.0% | 0.6% / 6.1% | 95.8% | 0.0 |
+| B_bwv66_6 | 4/4 77 | 4/4 x1.0 | 52.8% | 100.0% | 64.3% | 0.0% | 12.1% / 14.5% | 90.9% | 0.0 |
+| B_bwv269 | 4/4 98 | 3/4 x1.0 | 89.1% | 100.0% | 80.0% | 22.7% | 2.9% / 5.6% | 76.7% | 0.71 |
+| B_bwv347 | 4/4 89 | 4/4 x1.0 | 62.3% | 100.0% | 89.5% | 100.0% | 2.8% / 4.6% | 88.2% | 0.0 |
+| B_bwv153_1 | 4/4 80 | 4/4 x1.0 | 100.0% | 100.0% | 71.7% | 0.0% | 6.5% / 3.8% | 74.4% | 0.09 |
+| B_bwv86_6 | 4/4 93 | 4/4 x1.0 | 72.1% | 100.0% | 87.0% | 0.0% | 11.7% / 11.2% | 85.0% | 0.1 |
+| B_bwv267 | 4/4 84 | 4/4 x1.0 | 100.0% | 100.0% | 63.6% | 0.0% | 11.2% / 6.5% | 77.9% | 0.17 |
+| B_bwv40_8 | 4/4 86 | 4/4 x1.0 | 73.7% | 100.0% | 82.2% | 0.0% | 1.9% / 3.1% | 88.5% | 0.0 |
+| B_bwv244_37 | 4/4 147 | 4/4 x2.01 | 98.1% | 96.0% | 52.0% | 83.3% | 11.2% / 9.4% | 93.8% | 0.56 |
+| B_bwv26_6 | 4/4 82 | 4/4 x1.0 | 57.5% | 100.0% | 80.0% | 0.0% | 1.1% / 2.5% | 81.6% | 0.1 |
+| B_bwv64_2 | 3/4 93 | 4/4 x1.0 | 100.0% | 100.0% | 29.7% | 27.3% | 2.7% / 5.2% | 90.2% | 0.0 |
+| B_bwv2_6 | 4/4 92 | 4/4 x1.0 | 93.2% | 100.0% | 94.6% | 0.0% | 3.5% / 5.6% | 77.3% | 0.27 |
+| B_bwv101_7 | 4/4 80 | 4/4 x1.0 | 100.0% | 100.0% | 61.2% | 0.0% | 5.2% / 6.9% | 93.8% | 0.31 |
+| C_bwv104_6_arp | 4/4 78 | 4/4 x1.0 | 100.0% | 100.0% | 95.6% | 0.0% | 9.4% / 6.4% | 71.1% | 0.0 |
+| C_bwv108_6_arp | 4/4 144 | 4/4 x2.0 | 98.4% | 100.0% | 100.0% | 100.0% | 5.7% / 1.4% | 67.7% | 0.04 |
+| C_bwv113_8_arp | 4/4 96 | 4/4 x1.0 | 97.7% | 100.0% | 100.0% | 100.0% | 3.6% / 1.1% | 62.8% | 0.0 |
+| D_bwv66_6 | 4/4 154 | 4/4 x2.0 | 100.0% | 100.0% | 100.0% | 0.0% | 1.0% / 1.9% | 83.3% | 0.16 |
+| D_bwv269 | 4/4 98 | 3/4 x1.0 | 100.0% | 100.0% | 100.0% | 27.3% | 0.4% / 2.3% | 89.1% | 0.44 |
+| D_bwv347 | 4/4 89 | 4/4 x1.0 | 98.1% | 100.0% | 98.0% | 100.0% | 4.5% / 6.4% | 88.2% | 0.07 |
+| D_bwv153_1 | 4/4 160 | 4/4 x2.0 | 95.7% | 100.0% | 95.2% | 100.0% | 3.8% / 3.4% | 84.8% | 0.19 |
+| D_bwv86_6 | 4/4 93 | 4/4 x1.0 | 97.7% | 100.0% | 97.5% | 0.0% | 3.6% / 7.9% | 85.0% | 0.18 |
+| D_bwv267 | 4/4 84 | 4/4 x1.0 | 97.4% | 100.0% | 98.6% | 0.0% | 6.8% / 6.9% | 77.6% | 0.33 |
+| D_bwv40_8 | 4/4 86 | 4/4 x1.0 | 94.7% | 100.0% | 94.0% | 100.0% | 1.9% / 5.4% | 86.2% | 0.19 |
+| D_bwv244_37 | 4/4 147 | 4/4 x2.01 | 98.1% | 100.0% | 94.0% | 100.0% | 12.0% / 10.4% | 86.5% | 0.08 |
+| D_bwv26_6 | 4/4 164 | 4/4 x2.0 | 85.0% | 100.0% | 74.1% | 100.0% | 2.2% / 3.6% | 92.5% | 0.24 |
+| D_bwv64_2 | 4/4 93 | 4/4 x1.0 | 97.4% | 100.0% | 91.7% | 100.0% | 2.1% / 4.4% | 92.5% | 0.08 |
+| D_bwv2_6 | 4/4 92 | 4/4 x1.0 | 97.7% | 100.0% | 97.6% | 0.0% | 6.6% / 7.4% | 81.8% | 0.25 |
+| D_bwv101_7 | 4/4 160 | 4/4 x2.0 | 98.0% | 100.0% | 89.4% | 100.0% | 4.6% / 5.6% | 84.2% | 0.08 |
 
 </details>
 <!-- AUTO:END -->

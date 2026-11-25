@@ -79,7 +79,7 @@ def run_piece(set_name: str, piece: str) -> dict:
            "melody_f1": f1(truth, mel_rows), "analyze_s": round(t_an, 1)}
     for mode in ("solo", "duet"):
         arr = pipeline.arrange(an, ArrangeOptions(mode=mode))
-        g = an.grid
+        g = pipeline.bar_grid(an, ArrangeOptions(mode=mode), melody)   # the grid arrange wrote on
         flute_rows = [(q.pitch, g.to_seconds(q.start / TICKS_PER_BEAT),
                        g.to_seconds(q.end / TICKS_PER_BEAT)) for q in arr.flute]
         if mode == "solo":
