@@ -114,3 +114,13 @@ def test_octave_slip_is_fixed_but_real_leaps_stay():
     assert [n.pitch for n in out] == [72, 84, 83, 79, 77]
     out, _ = fit_to_flute(line([79, 67, 79]))                # G5 G4 G5 (first/last untouched)
     assert [n.pitch for n in out][1] == 79
+
+
+def test_phrase_edge_slips_fixed_but_octave_leap_kept():
+    def line(pitches):
+        return [QNote(p, 12 * i, 12) for i, p in enumerate(pitches)]
+    out, _ = fit_to_flute(line([95, 80, 81, 83, 81]))     # B6 then G#5...: B6 is a slip
+    first, second = out[0].pitch, out[1].pitch
+    assert first % 12 == 95 % 12 and abs(first - second) <= 12   # B, now near the G#
+    out, _ = fit_to_flute(line([72, 84, 83, 79, 77]))     # C5 C6: an octave leap stays
+    assert [n.pitch for n in out][:2] == [72, 84]

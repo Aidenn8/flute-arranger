@@ -64,6 +64,15 @@ def _fix_octave_slips(line: list[QNote], idx: list[int]) -> None:
             q = p - 12 if up > 0 else p + 12
             if _playable(q) and abs(q - before) <= SLIP and abs(q - after) <= SLIP:
                 line[i] = replace(line[i], pitch=q)
+    # a phrase's first or last note more than an octave from its neighbour is a
+    # slip too (an opening octave leap, C4 to C5, is exactly 12 and stays)
+    if len(idx) >= 2:
+        for i, j in ((idx[0], idx[1]), (idx[-1], idx[-2])):
+            p, other = line[i].pitch, line[j].pitch
+            if abs(p - other) > 12:
+                q = p - 12 if p > other else p + 12
+                if _playable(q):
+                    line[i] = replace(line[i], pitch=q)
 
 
 def _playable(pitch: int) -> bool:
