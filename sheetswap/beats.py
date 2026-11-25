@@ -44,6 +44,7 @@ MELODY_MIN_SHARE = 0.4    # ...unless the tune alone splits fewer than this shar
 EIGHTH_BEAT_BPM = 130.0   # beats this fast or faster, 3 to a bar, split in two: 8th beats (3/8;
                           # a neural tracker puts Für Elise at 150)...
 EIGHTH_MIN_SHARE = 0.25   # ...when at least this share of the beats with notes split in two
+REPEAT_PLACES = 12        # onset places per beat for bar_repetition
 _THIRDS = (1 / 3, 2 / 3)
 _QUARTERS = (1 / 4, 3 / 4)
 _HALF = 1 / 2
@@ -154,6 +155,44 @@ def melody_downbeat(melody, grid: BeatGrid, music_start: float, bass=None) -> Be
     first = next((i for i in range(len(b)) if i % bpb == best and b[i] >= music_start - 0.25 * period),
                  best)
     return replace(grid, first_downbeat=first)
+
+
+def bar_repetition(beats, notes, start: float = 0.0) -> float:
+    """How much more the rhythm repeats every 4 beats than every 3 (> 0: 4 beats a bar).
+
+    Bars repeat their rhythm. Each beat (from `start` on) gets its onset
+    pattern: where the notes start inside it, in REPEAT_PLACES places,
+    velocity-weighted. The result is the mean cosine similarity of beats 4
+    and 8 apart minus that of beats 3 and 6 apart. Measured on the beats the
+    network finds: Träumerei +0.06 (4/4), the Bach Menuet -0.06 (3/4),
+    Gymnopédie -0.02 (3/4), Bach chorales in 4/4 0.00..+0.06, the 3/4 one
+    -0.02..-0.03. Returns 0 when there are too few beats.
+    """
+    b = np.asarray(beats, dtype=float)
+    n = len(b) - 1
+    if n < 16:
+        return 0.0
+    pat = np.zeros((n, REPEAT_PLACES))
+    for x in notes:
+        if not b[0] <= x.start < b[-1]:
+            continue
+        i = int(np.searchsorted(b, x.start, side="right")) - 1
+        k = int(round((x.start - b[i]) / (b[i + 1] - b[i]) * REPEAT_PLACES))
+        if k == REPEAT_PLACES:
+            i, k = i + 1, 0
+        if i < n:
+            pat[i, k] += x.velocity / 127
+    lo = int(np.searchsorted(b, start))
+
+    def alike(lag: int) -> float:
+        a, c = pat[lo:n - lag], pat[lo + lag:n]
+        na, nc = np.linalg.norm(a, axis=1), np.linalg.norm(c, axis=1)
+        ok = (na > 0) & (nc > 0)
+        if ok.sum() < 4:
+            return 0.0
+        return float(np.mean(np.sum(a[ok] * c[ok], axis=1) / (na[ok] * nc[ok])))
+
+    return (alike(4) + alike(8)) / 2 - (alike(3) + alike(6)) / 2
 
 
 def _beat_splits(parts, grid: BeatGrid) -> list[tuple[int, int, int]]:
