@@ -255,7 +255,8 @@ def bar_grid(an: Analysis, opts: ArrangeOptions, melody: list[Note]) -> BeatGrid
     grid = BeatGrid(grid.beats, bpb, grid.first_downbeat)
     starts = [n.start for ns in an.sources.values() for n in ns]
     if an.kind != "midi" and starts:
-        grid = melody_downbeat(melody, grid, min(starts))
+        accomp = an.sources.get("bass") or [n for n in an.sources.get("piano", []) if n.pitch < 55]
+        grid = melody_downbeat(melody, grid, min(starts), accomp)
     if opts.barshift:
         first = grid.first_downbeat + opts.barshift % bpb
         if starts:

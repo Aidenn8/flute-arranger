@@ -21,6 +21,7 @@ THREE_MARGIN = 1.1        # 3/4 must beat 4/4 by 10% (ties go to 4/4)
 SILENCE = 0.01            # RMS below 1% of the peak (-40 dB) counts as silence
 DRUMS_MIN = 0.1           # drums stem quieter than this share of the mix RMS is ignored
 DOWNBEAT_MARGIN = 1.1     # the tune's long notes must favour one beat of the bar by 10%
+SPARSE_BASS = 0.6         # a bass hitting fewer than this share of beats helps find beat 1
 NOTE_BLEND = 0.7          # weight of the notes' onset curve vs the audio's, for beat tracking
 BASS_WEIGHT = 1.5         # extra weight of low notes in the curve used to find the downbeats
 
@@ -85,7 +86,7 @@ def track_beats(wav: Path, drums_wav: Path | None = None, notes=None) -> BeatGri
     return _finish(beats, duration, env, start, end)
 
 
-def melody_downbeat(melody, grid: BeatGrid, music_start: float) -> BeatGrid:
+def melody_downbeat(melody, grid: BeatGrid, music_start: float, bass=None) -> BeatGrid:
     """Place the bar lines where the tune leans: its long notes start on beat 1.
 
     A melody lengthens its notes on strong beats (agogic accent), which marks
@@ -106,6 +107,20 @@ def melody_downbeat(melody, grid: BeatGrid, music_start: float) -> BeatGrid:
         k = int(np.argmin(np.abs(b - x.start)))
         if abs(b[k] - x.start) < 0.25 * period:
             weight[k] += (x.velocity / 127) * min(x.end - x.start, 2 * period) / period
+    # a bass that plays about once a bar (oom-pah, a held root) marks beat 1;
+    # a bass that moves every beat (a chorale, a walking line) says nothing
+    hits = np.zeros(len(b))
+    for x in bass or []:
+        k = int(np.argmin(np.abs(b - x.start)))
+        if abs(b[k] - x.start) < 0.25 * period:
+            hits[k] = 1.0
+    span = (b >= music_start - 0.25 * period)
+    share = float(hits[span].mean()) if span.any() else 0.0
+    if 0 < share < SPARSE_BASS:
+        w = weight[span]
+        if w.std() > 0:
+            weight = weight / w.std()
+        weight = weight + hits
     idx = np.arange(len(b))
     means = [float(weight[idx % bpb == p].mean()) for p in range(bpb)]
     best = int(np.argmax(means))
