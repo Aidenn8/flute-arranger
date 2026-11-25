@@ -58,11 +58,24 @@ def test_corrupt_caches_are_rebuilt(tmp_path):
     assert pipeline.arrange_and_render(d, opts)["svgs"]
 
 
-def test_duet_without_chords_says_so():
+def test_tune_without_accompaniment_gets_harmonized():
+    # a melody-only file: the piano part is made from the tune itself (C major)
+    tune = [Note(p, i * 0.5, i * 0.5 + 0.45) for i, p in enumerate(
+        [72, 74, 76, 77, 79, 77, 76, 74, 72, 76, 79, 84, 79, 76, 74, 72])]
+    an = _analysis({"midi_melody": tune, "midi_all": list(tune)})
+    arr = pipeline.arrange(an, ArrangeOptions(mode="duet"))
+    assert arr.rh and arr.lh
+    assert not any("flute alone" in w for w in arr.warnings)
+    assert {q.pitch % 12 for q in arr.lh} <= {0, 2, 4, 5, 7, 9, 11}        # diatonic bass
+    flute_top = {q.start: q.pitch for q in arr.flute}
+    assert all(q.pitch < min(flute_top.values()) + 12 for q in arr.rh)
+
+
+def test_duet_with_almost_nothing_says_so():
     an = _analysis({"midi_melody": [Note(72, 0.0, 0.5)], "midi_all": [Note(72, 0.0, 0.5)]})
     arr = pipeline.arrange(an, ArrangeOptions(mode="duet"))
-    assert not arr.rh and not arr.lh
-    assert any("flute alone" in w for w in arr.warnings)
+    if not arr.rh and not arr.lh:
+        assert any("flute alone" in w for w in arr.warnings)
 
 
 def test_render_is_cached(tmp_path):

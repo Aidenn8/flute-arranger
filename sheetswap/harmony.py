@@ -431,7 +431,8 @@ def harmonize(notes: list[Note], grid: BeatGrid, bass: list[Note] | None = None,
     left out. A new chord may start every `unit` ticks. Where the
     accompaniment is silent there is no chord, unless it is too thin to
     follow, in which case the tune is harmonized wherever it plays. With no
-    accompaniment at all there are no chords."""
+    accompaniment at all (a voice alone, a melody-only MIDI file) the tune is
+    harmonized, so the flute still gets a supporting piano part."""
     bar = grid.beats_per_bar * T
     acc = _ticks(list(notes), grid)
     low_part = _ticks(list(bass or []), grid)
@@ -439,7 +440,7 @@ def harmonize(notes: list[Note], grid: BeatGrid, bass: list[Note] | None = None,
     melody = [q for q in (melody or []) if q.dur > 0]
     starts = [r[0] for r in rows] + [q.start for q in melody]
     ends = [r[1] for r in rows] + [q.end for q in melody]
-    if not rows:
+    if not rows and not melody:
         return []
     k0 = floor(min(starts) / unit)
     K = ceil(max(ends) / unit) - k0

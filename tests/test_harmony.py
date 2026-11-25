@@ -177,4 +177,5 @@ def test_thin_accompaniment_harmonizes_the_tune():
     noise = [Note(48 + i, 0.0, 8.0, 60) for i in range(12)]
     assert [(c.root, c.quality) for c in harmonize(noise, _grid(), melody=melody)] == [
         (0, "maj"), (5, "maj"), (7, "maj"), (0, "maj")]
-    assert harmonize([], _grid(), melody=melody) == []          # nothing at all: no piano
+    assert harmonize([], _grid(), melody=melody)                # a tune alone: harmonized
+    assert harmonize([], _grid()) == []                         # nothing at all: no piano
