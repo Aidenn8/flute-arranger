@@ -16,6 +16,13 @@ ProgressFn = Callable[[int, int, str], None]
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus", ".webm", ".aiff", ".aif"}
 MIDI_EXTS = {".mid", ".midi"}
 SCORE_EXTS = {".musicxml", ".xml", ".mxl"}     # sheet music (MusicXML), read by score_input
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".heic", ".webp", ".pdf"}   # pictures of sheet music (omr)
+
+
+def find_images(song_dir: Path) -> list[Path]:
+    """Uploaded pictures of sheet music (input.png, or input-01.png, input-02.jpg, ...), in order."""
+    return sorted(p for p in Path(song_dir).glob("input*")
+                  if p.suffix.lower() in IMAGE_EXTS and p.is_file())
 
 
 def _noop(step: int, total: int, msg: str) -> None:
@@ -50,6 +57,13 @@ def analyze(song_dir: Path, kind: str = "auto", progress: ProgressFn = _noop) ->
             return load_analysis(song_dir)
         except (OSError, ValueError, KeyError, TypeError):
             pass                                  # unreadable cache: analyze again
+    images = find_images(song_dir)
+    if images and not (song_dir / "input.musicxml").exists():
+        from . import omr
+        n = len(images)
+        progress(1, 3, f"Reading the sheet music from the picture{'s' if n > 1 else ''} "
+                       f"(about a minute a page)")
+        omr.images_to_musicxml(images, song_dir, name="input.musicxml", title=_title(song_dir) or None)
     src = find_input(song_dir)
     an = _analyze_score(src, song_dir, progress)  # sheet music, or a MIDI file written as a score
     if an is None and src.suffix.lower() in MIDI_EXTS:

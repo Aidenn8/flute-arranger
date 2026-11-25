@@ -34,8 +34,9 @@ from flask import (Flask, abort, redirect, render_template, request,
 from .. import config
 from ..model import DOTTED_BEAT, EIGHTH_BEAT, ArrangeOptions
 
+IMAGE_TYPES = ("png", "jpg", "jpeg", "heic", "webp", "pdf")   # screenshots/photos/PDFs of sheet music
 UPLOAD_TYPES = ("mp3", "wav", "m4a", "aac", "flac", "ogg", "oga", "opus", "webm", "aiff", "aif",
-                "mid", "midi", "musicxml", "mxl", "xml")
+                "mid", "midi", "musicxml", "mxl", "xml") + IMAGE_TYPES
 MIDI_TYPES = ("mid", "midi")
 SCORE_TYPES = ("musicxml", "mxl", "xml")     # sheet music: the flute part gets its exact notes
 MAX_UPLOAD_MB = 200
@@ -480,17 +481,22 @@ def _new_song_dir() -> Path:
 
 @app.post("/upload")
 def upload():
-    f = request.files.get("file")
-    filename = ""
-    if f is not None and f.filename:
-        filename = f.filename.replace("\\", "/").rsplit("/", 1)[-1].strip()[:200]
-    if not filename:
+    files = [f for f in request.files.getlist("file") if f is not None and f.filename]
+    names = [f.filename.replace("\\", "/").rsplit("/", 1)[-1].strip()[:200] for f in files]
+    if not files or not names[0]:
         return _index(error="Please choose a file first."), 400
+    filename = names[0]
     ext = _ext(filename)
-    if ext not in UPLOAD_TYPES:
-        return _index(error=f'Sorry, "{filename}" isn\'t a file this can read. Please upload '
-                            "audio (mp3, wav, m4a, aac, flac or ogg), MIDI (mid or midi) or "
-                            "sheet music (MusicXML: musicxml, mxl or xml)."), 400
+    bad = next((n for n in names if _ext(n) not in UPLOAD_TYPES), None)
+    if bad is not None:
+        return _index(error=f'Sorry, "{bad}" isn\'t a file this can read. Please upload '
+                            "audio (mp3, wav, m4a, aac, flac or ogg), MIDI (mid or midi), "
+                            "sheet music (MusicXML: musicxml, mxl or xml) or pictures of sheet "
+                            "music (png, jpg, heic, webp or pdf)."), 400
+    images = len(files) > 1 or ext in IMAGE_TYPES
+    if images and any(_ext(n) not in IMAGE_TYPES for n in names):
+        return _index(error="Several files at once only works for pictures of sheet music "
+                            "(one picture per page, in order)."), 400
     kind = request.form.get("kind")
     kind = kind if kind in KINDS else "auto"
     mode = request.form.get("mode")
@@ -498,16 +504,22 @@ def upload():
 
     d = _new_song_dir()
     song_id = d.name
-    dest = d / f"input.{ext}"
+    if images:   # input-01.png, input-02.jpg, ...: pipeline reads them in this order
+        dests = [d / f"input-{i:02d}.{_ext(n)}" for i, n in enumerate(names, 1)]
+    else:
+        dests = [d / f"input.{ext}"]
     try:
-        f.save(dest)
-        empty = dest.stat().st_size == 0
+        for f, dest in zip(files, dests):
+            f.save(dest)
+        empty = next((n for n, dest in zip(names, dests) if dest.stat().st_size == 0), None)
     except Exception:
         shutil.rmtree(d, ignore_errors=True)
         raise
-    if empty:
+    if empty is not None:
         shutil.rmtree(d, ignore_errors=True)
-        return _index(error=f'"{filename}" is empty. Please choose another file.'), 400
+        return _index(error=f'"{empty}" is empty. Please choose another file.'), 400
+    if len(names) > 1:
+        filename = f"{names[0]} (+{len(names) - 1} more page{'s' if len(names) > 2 else ''})"
 
     _write_meta(d, new_meta(song_id, filename, kind, mode))
     log(d, f"Uploaded {filename}")
@@ -542,8 +554,9 @@ def song(song_id: str):
         facts = {"key": key_name(arr.key_fifths, arr.key_mode),
                  "time": f"{num}/{den}", "tempo": tempo_text(arr.bpm, arr.beat_ticks)}
     ext = _ext(meta.get("filename", ""))
+    from_pictures = any(p.suffix.lower().lstrip(".") in IMAGE_TYPES for p in d.glob("input-*"))
     original_url = None
-    if ext not in MIDI_TYPES and ext not in SCORE_TYPES:
+    if ext not in MIDI_TYPES and ext not in SCORE_TYPES and not from_pictures:
         original_url = _file_url(song_id, d, d / f"input.{ext}")
     return render_template(
         "song.html", **ctx,
@@ -553,7 +566,7 @@ def song(song_id: str):
         preview_url=_file_url(song_id, d, result.get("mp3")),
         original_url=original_url,
         original_is_midi=ext in MIDI_TYPES,
-        original_is_score=ext in SCORE_TYPES,
+        original_is_score=ext in SCORE_TYPES or from_pictures,
         musicxml_url=_file_url(song_id, d, result.get("musicxml"), download=True),
         midi_url=_file_url(song_id, d, result.get("midi"), download=True),
     )

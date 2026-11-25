@@ -382,3 +382,21 @@ def test_worker_thread_runs_upload(out, monkeypatch):
         time.sleep(0.02)
     assert read_meta(d)["status"] == "done"
     assert len(calls) == 1
+
+
+def test_upload_several_pictures_saves_pages_in_order(client, out):
+    resp = client.post("/upload", content_type="multipart/form-data", data={
+        "file": [(io.BytesIO(b"\x89PNG page1"), "Page 1.png"), (io.BytesIO(b"\xff\xd8 page2"), "page2.jpg")],
+        "kind": "auto", "mode": "solo"})
+    assert resp.status_code == 302
+    song_id = resp.headers["Location"].rsplit("/", 1)[-1]
+    d = out / song_id
+    assert (d / "input-01.png").read_bytes() == b"\x89PNG page1"
+    assert (d / "input-02.jpg").read_bytes() == b"\xff\xd8 page2"
+    assert web._jobs.get_nowait() == song_id
+
+
+def test_upload_mixing_pictures_and_audio_is_refused(client, out):
+    resp = client.post("/upload", content_type="multipart/form-data", data={
+        "file": [(io.BytesIO(b"x"), "a.png"), (io.BytesIO(b"y"), "b.mp3")]})
+    assert resp.status_code == 400 and "pictures of sheet music" in resp.get_data(as_text=True)

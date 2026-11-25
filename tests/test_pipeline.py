@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pretty_midi
 import pytest
@@ -354,3 +355,21 @@ def test_grid_tracker_survives_save_and_load(tmp_path):
     an.grid = BeatGrid([0.0, 0.5, 1.0, 1.5], 4, 0, tracker="neural")
     an.save(tmp_path / "a.json")
     assert Analysis.load(tmp_path / "a.json").grid.tracker == "neural"
+
+
+def test_pictures_are_read_into_a_score(tmp_path, monkeypatch):
+    from music21 import corpus
+    from sheetswap import omr
+    d = tmp_path / "pics"
+    d.mkdir()
+    (d / "input-01.png").write_bytes(b"png")
+    seen = []
+    def fake(images, out_dir, name="omr.musicxml", title=None):
+        seen.extend(p.name for p in images)
+        path = Path(out_dir) / name
+        corpus.parse("bach/bwv66.6").write("musicxml", fp=str(path))
+        return path
+    monkeypatch.setattr(omr, "images_to_musicxml", fake)
+    an = pipeline.analyze(d)
+    assert seen == ["input-01.png"] and an.kind == "score"
+    assert pipeline.arrange(an, ArrangeOptions()).flute
