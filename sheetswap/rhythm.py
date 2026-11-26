@@ -22,6 +22,7 @@ counts too: beat 1 (then the middle of the bar) rarely starts without a note
 from __future__ import annotations
 
 import math
+import os
 from collections import Counter
 from dataclasses import replace
 from itertools import combinations
@@ -316,6 +317,27 @@ def _end_step(pattern: tuple[int, ...], unit: int, simple: bool) -> int:
     return EIGHTH
 
 
+def _merged(notes: list[Note], grid: BeatGrid) -> tuple[list[tuple[float, float, Note]], list[bool]]:
+    """The notes in ticks, (start, end, note) by start, with onsets closer than MERGE
+    made one (the louder note stays); and which of them look like grace notes: under a
+    16th long, and under half as long as a note starting less than a 16th from it."""
+    raw = sorted(
+        ((grid.to_ticks(n.start), grid.to_ticks(max(n.end, n.start)), n) for n in notes),
+        key=lambda x: (x[0], -x[2].velocity),
+    )
+    merged: list[tuple[float, float, Note]] = []
+    for s, e, n in raw:
+        if merged and s - merged[-1][0] < MERGE:
+            if (n.velocity, n.dur) > (merged[-1][2].velocity, merged[-1][2].dur):
+                merged[-1] = (s, e, n)
+            continue
+        merged.append((s, e, n))
+    grace = [e - s < SIXTEENTH and any(0 <= j < len(merged) and abs(merged[j][0] - s) < SIXTEENTH
+                                       and merged[j][2].dur > 2 * n.dur for j in (i - 1, i + 1))
+             for i, (s, e, n) in enumerate(merged)]
+    return merged, grace
+
+
 def quantize_line(notes: list[Note], grid: BeatGrid, simple: bool = False) -> list[QNote]:
     """Monophonic notes (seconds) -> sorted, non-overlapping QNotes (ticks).
 
@@ -332,20 +354,7 @@ def quantize_line(notes: list[Note], grid: BeatGrid, simple: bool = False) -> li
     unit = grid.beat_ticks
     min_dur = EIGHTH if simple else SIXTEENTH
 
-    raw = sorted(
-        ((grid.to_ticks(n.start), grid.to_ticks(max(n.end, n.start)), n) for n in notes),
-        key=lambda x: (x[0], -x[2].velocity),
-    )
-    merged: list[tuple[float, float, Note]] = []
-    for s, e, n in raw:
-        if merged and s - merged[-1][0] < MERGE:
-            if (n.velocity, n.dur) > (merged[-1][2].velocity, merged[-1][2].dur):
-                merged[-1] = (s, e, n)
-            continue
-        merged.append((s, e, n))
-    grace = [e - s < SIXTEENTH and any(0 <= j < len(merged) and abs(merged[j][0] - s) < SIXTEENTH
-                                       and merged[j][2].dur > 2 * n.dur for j in (i - 1, i + 1))
-             for i, (s, e, n) in enumerate(merged)]
+    merged, grace = _merged(notes, grid)
     ticks, patterns = _read_rhythm([s for s, _, _ in merged], unit, simple, grace,
                                    grid.beats_per_bar)
 
@@ -415,4 +424,344 @@ def add_breath_marks(line: list[QNote], beats_per_bar: int,
                 best = max(cands, key=lambda i: (out[i].dur, out[i].end))
                 out[best].breath_after = True
             ws = we
+    return out
+
+
+# Which reader writes a recording's tune: "rules" (quantize_line) or "learned"
+# (quantize_line_learned). SHEETSWAP_RHYTHM=learned / =rules overrides the default.
+RHYTHM_DEFAULT = "rules"
+
+
+def rhythm_reader() -> str:
+    v = os.environ.get("SHEETSWAP_RHYTHM", "").strip().lower()
+    return v if v in ("rules", "learned") else RHYTHM_DEFAULT
+
+
+# The learned reader was trained on the piano model's transcriptions only; tunes taken
+# from other transcriptions (Basic Pitch: violin, voice, a band) keep the rules.
+LEARNED_SOURCES = ("piano",)
+
+
+def quantize_tune(notes: list[Note], grid: BeatGrid, simple: bool = False,
+                  recording: bool = True, source: str = "piano") -> list[QNote]:
+    """The tune on the grid, read by rhythm_reader(): the learned reader is used for
+    recordings whose tune comes from the piano transcription (`source`, LEARNED_SOURCES);
+    a played-in MIDI file and other sources keep the rules."""
+    if recording and source in LEARNED_SOURCES and rhythm_reader() == "learned":
+        return quantize_line_learned(notes, grid, simple)
+    return quantize_line(notes, grid, simple)
+
+
+# ---------------------------------------------------------------- the learned reader
+#
+# quantize_line_learned reads the same merged onsets with a small network trained on
+# ASAP performances as our pipeline hears them (transcribed, on a beat grid that is a
+# little off; bench/train_rhythm.py, bench/TRAINING.md). For each note it gives
+#   - where the note is written: one of 24 places, a fraction of the beat (TWELFTHS)
+#     in the beat the note was heard in, the one before or the one after;
+#   - how long a rest follows it before the next note (RESTS, or "long");
+#   - whether it is no note of the score at all (a transcription extra, a grace note).
+# The places are then chosen together (dynamic programming, onsets strictly in order,
+# a note may be left out at the network's price for that). Without the model files
+# (models/rhythm/) or torch it falls back to quantize_line.
+
+TWELFTHS = (0, 2, 3, 4, 6, 8, 9, 10)          # places in a beat, in twelfths of the beat
+SHIFTS = (-1, 0, 1)                            # the beat before, the beat heard, the next
+N_PLACES = len(TWELFTHS) * len(SHIFTS)
+RESTS = (0, 2, 3, 4, 6, 8, 9, 10, 12, 18, 24)  # twelfths of a beat; then "long"
+N_RESTS = len(RESTS) + 1
+LONG_REST = len(RESTS)
+# twelfths a beat of each kind is read in (and when simple: no finer than 8ths)
+ALLOWED = {QUARTER_BEAT: ((0, 3, 4, 6, 8, 9), (0, 6)),
+           DOTTED_BEAT: ((0, 2, 4, 6, 8, 10), (0, 4, 8)),
+           EIGHTH_BEAT: ((0, 6), (0,))}
+N_FEATURES = 63
+_learned_cache: dict = {}
+
+
+def place_ticks(cls: int, beat: int, unit: int) -> int:
+    """Tick of place class cls for a note heard in beat `beat` (beats of `unit` ticks)."""
+    shift, k = divmod(cls, len(TWELFTHS))
+    return (beat + SHIFTS[shift]) * unit + TWELFTHS[k] * unit // 12
+
+
+def place_class(ticks: float, beat: int, unit: int) -> int | None:
+    """The place class of a written onset `ticks` for a note heard in beat `beat`, or
+    None if it is none of them (32nds, 16th triplets, further than a beat away)."""
+    tw = (ticks - (beat - 1) * unit) * 12 / unit
+    r = round(tw)
+    if abs(tw - r) > 0.25 or not 0 <= r < 36:
+        return None
+    shift, w = divmod(r, 12)
+    return shift * len(TWELFTHS) + TWELFTHS.index(w) if w in TWELFTHS else None
+
+
+def rest_class(twelfths: float) -> int | None:
+    """The rest class of a rest this many twelfths of a beat long (None: between classes)."""
+    if twelfths > 26:
+        return LONG_REST
+    r = round(twelfths)
+    if abs(twelfths - r) > 0.25 or r not in RESTS:
+        return None
+    return RESTS.index(r)
+
+
+def place_mask(unit: int, simple: bool = False):
+    import numpy as np
+    ok = ALLOWED[unit][1 if simple else 0]
+    return np.array([TWELFTHS[c % len(TWELFTHS)] in ok for c in range(N_PLACES)])
+
+
+def rest_mask(unit: int, simple: bool = False):
+    import numpy as np
+    ok = set(ALLOWED[unit][1 if simple else 0]) | {12, 18, 24}
+    return np.array([r in ok for r in RESTS] + [True])
+
+
+def rule_reading(merged: list[tuple[float, float, Note]], grace: list[bool], grid: BeatGrid
+                 ) -> list[int | None]:
+    """The rules' reading of the merged onsets (_read_rhythm, full detail): each one's
+    tick or None. One of the network's inputs."""
+    return _read_rhythm([s for s, _, _ in merged], grid.beat_ticks, False, grace, grid.beats_per_bar)[0]
+
+
+def learned_features(merged: list[tuple[float, float, Note]], grace: list[bool], grid: BeatGrid,
+                     rule: list[int | None] | None = None):
+    """Per note (as _merged gives them) the network's inputs, float32 [n, N_FEATURES]:
+    where in the beat it was heard (and its harmonics), gaps to the neighbours and its
+    length (beats, log), its length and gap in seconds, the local beat length against
+    the piece's, velocity (and against its neighbours), pitch and steps, the beat's
+    kind, place in the bar, grace-note look, how many notes share its beat, whether the
+    piece plays triplets, the piece's typical gap; and the place the rules read it at
+    (rule_reading, one-hot over the place classes, or "left out / elsewhere")."""
+    import numpy as np
+    n = len(merged)
+    if not n:
+        return np.zeros((0, N_FEATURES), dtype=np.float32)
+    if rule is None:
+        rule = rule_reading(merged, grace, grid)
+    unit = grid.beat_ticks
+    x = np.array([s for s, _, _ in merged], dtype=float) / unit
+    e = np.maximum(np.array([en for _, en, _ in merged], dtype=float) / unit, x)
+    fl = np.floor(x)
+    f = x - fl
+    cols = []
+    for k in (1, 2, 3, 4):
+        cols += [np.sin(2 * np.pi * k * f), np.cos(2 * np.pi * k * f)]
+    cols.append(f)
+
+    def lg(v, lo=-5.0, hi=3.0):
+        v = np.where(np.isfinite(v), v, 2.0 ** hi)
+        return np.clip(np.log2(np.maximum(v, 2.0 ** lo)), lo, hi)
+
+    big = np.full(1, np.inf)
+    ioi_p = np.concatenate([big, np.diff(x)])
+    ioi_n = np.concatenate([np.diff(x), big])
+    cols += [lg(ioi_p), lg(ioi_n), ~np.isfinite(ioi_p), ~np.isfinite(ioi_n)]
+    cols.append(lg(e - x))
+    nxt = np.concatenate([x[1:], x[-1:] + 4])
+    cols.append(np.clip(nxt - e, 0, 4))
+    st = np.array([m.start for _, _, m in merged])
+    en = np.array([max(m.end, m.start) for _, _, m in merged])
+    cols += [lg(en - st, -6, 2), lg(np.concatenate([np.diff(st), big]), -6, 2)]
+    b = np.asarray(grid._beats(), dtype=float)
+    lens = np.diff(b)
+    lens = np.where(lens > 0, lens, np.median(lens)) if len(lens) else np.array([0.5])
+    idx = np.clip((fl + grid.first_downbeat).astype(int), 0, len(lens) - 1)
+    med = float(np.median(lens))
+    cols.append(np.clip(np.log2(lens[idx] / med), -2, 2))
+    cols.append(np.clip(np.log2(lens[np.clip(idx + 1, 0, len(lens) - 1)] / lens[idx]), -1, 1))
+    vel = np.array([m.velocity for _, _, m in merged], dtype=float)
+    around = np.array([np.median(vel[max(0, i - 8):i + 9]) for i in range(n)])
+    cols += [vel / 127, (vel - around) / 32]
+    p = np.array([m.pitch for _, _, m in merged], dtype=float)
+    dp = np.diff(p)
+    cols += [(p - 66) / 18, np.clip(np.concatenate([[0], dp]) / 12, -2, 2),
+             np.clip(np.concatenate([dp, [0]]) / 12, -2, 2)]
+    ones = np.ones(n)
+    cols += [ones * (unit == QUARTER_BEAT), ones * (unit == DOTTED_BEAT), ones * (unit == EIGHTH_BEAT)]
+    bpb = max(grid.beats_per_bar, 1)
+    in_bar = np.mod(fl, bpb)
+    cols += [in_bar == 0, in_bar / bpb, ones * (bpb == 2), ones * (bpb == 3), ones * (bpb == 4),
+             ones * (bpb not in (2, 3, 4))]
+    cols.append(np.array(grace, dtype=float))
+    beat_ids, first, counts = np.unique(fl, return_index=True, return_counts=True)
+    where = np.searchsorted(beat_ids, fl)
+    cols += [np.minimum(counts[where], 8) / 4, (np.arange(n) - first[where]) / 4]
+    cols.append(ones * uses_triplets(list(x * unit), unit))
+    gaps = np.diff(x)
+    cols.append(ones * (float(lg(np.array([np.median(gaps)]))[0]) if len(gaps) else 0.0))
+    said = np.zeros((n, N_PLACES + 1))
+    for i, t in enumerate(rule):
+        c = place_class(t, int(fl[i]), unit) if t is not None else None
+        said[i, N_PLACES if c is None else c] = 1
+    cols += list(said.T)
+    out = np.stack([np.asarray(c, dtype=np.float32) for c in cols], axis=1)
+    assert out.shape[1] == N_FEATURES, out.shape
+    return out
+
+
+def build_net(n_in: int = N_FEATURES, hidden: int = 96, layers: int = 2, dropout: float = 0.1):
+    """The network: per-note inputs -> a linear layer -> a bidirectional GRU over the
+    line -> place, rest and "not a score note" outputs (logits)."""
+    import torch
+    from torch import nn
+
+    class RhythmNet(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.inp = nn.Sequential(nn.Linear(n_in, hidden), nn.ReLU())
+            self.gru = nn.GRU(hidden, hidden, num_layers=layers, batch_first=True,
+                              bidirectional=True, dropout=dropout if layers > 1 else 0.0)
+            self.place = nn.Linear(2 * hidden, N_PLACES)
+            self.rest = nn.Linear(2 * hidden, N_RESTS)
+            self.extra = nn.Linear(2 * hidden, 1)
+
+        def forward(self, x):
+            h, _ = self.gru(self.inp(x))
+            return self.place(h), self.rest(h), self.extra(h).squeeze(-1)
+
+    return RhythmNet()
+
+
+def load_learned(path=None):
+    """(network, config) from models/rhythm/ (or `path`), cached; None when there is no
+    model there or it can't be loaded (no torch, a damaged file)."""
+    import json
+    import logging
+    from pathlib import Path
+    from . import config
+    d = Path(path) if path else config.MODELS_DIR / "rhythm"
+    key = str(d)
+    if key in _learned_cache:
+        return _learned_cache[key]
+    model = None
+    try:
+        if (d / "config.json").exists() and (d / "weights.pt").exists():
+            import torch
+            cfg = json.loads((d / "config.json").read_text())
+            if cfg.get("features") == N_FEATURES:
+                net = build_net(N_FEATURES, cfg["hidden"], cfg["layers"], 0.0)
+                net.load_state_dict(torch.load(d / "weights.pt", map_location="cpu", weights_only=True))
+                net.eval()
+                model = (net, cfg)
+    except Exception as e:                      # no torch, a damaged file: the rules read it
+        logging.getLogger(__name__).warning("learned rhythm model not loaded (%s)", e)
+        model = None
+    _learned_cache[key] = model
+    return model
+
+
+def learned_outputs(net, feats, zeroed=()):
+    """Log-probabilities from the network: places [n, N_PLACES], rests [n, N_RESTS],
+    and log p(extra), log p(score note) [n] each. `zeroed`: input columns the model
+    was trained without (its config's "zeroed")."""
+    import numpy as np
+    import torch
+    x = np.array(feats, dtype=np.float32)
+    x[:, list(zeroed)] = 0.0
+    with torch.no_grad():
+        pl, rs, ex = net(torch.from_numpy(x)[None])
+        lp = torch.log_softmax(pl[0], -1).numpy()
+        lr = torch.log_softmax(rs[0], -1).numpy()
+        lx = torch.nn.functional.logsigmoid(ex[0]).numpy()
+        lk = torch.nn.functional.logsigmoid(-ex[0]).numpy()
+    return lp, lr, lx, lk
+
+
+def lean_to_rules(lp, rule, beats, unit: int, bonus: float):
+    """lp with `bonus` (log units) added to each note's place the rules read, so the
+    network overrules the rules only where it is fairly sure (the model's config
+    "rule_bonus", chosen on the validation pieces)."""
+    if not bonus:
+        return lp
+    out = lp.copy()
+    for i, t in enumerate(rule):
+        c = place_class(t, int(beats[i]), unit) if t is not None and t == t else None
+        if c is not None:
+            out[i, c] += bonus
+    return out
+
+
+def decode_places(lp, l_extra, l_keep, beats, unit: int, simple: bool = False,
+                  extra_weight: float = 1.0, keep_states: int = 48) -> list[int | None]:
+    """Each note's written tick (None = left out): the likeliest places with onsets
+    strictly in order. lp: [n, N_PLACES] log-probabilities; l_extra / l_keep: log p of
+    the note being / not being a score note; beats: the beat each note was heard in."""
+    import numpy as np
+    cls_ok = np.flatnonzero(place_mask(unit, simple))
+    # a state: (tick of the last note kept, score, node); node = (parent, note, tick|None)
+    states: list[tuple[int, float, tuple | None]] = [(-10 ** 9, 0.0, None)]
+    for i in range(len(beats)):
+        drop = extra_weight * float(l_extra[i])
+        keep = float(l_keep[i])
+        row = lp[i][cls_ok] - np.logaddexp.reduce(lp[i][cls_ok])
+        cand = sorted((place_ticks(int(c), int(beats[i]), unit), keep + float(r))
+                      for c, r in zip(cls_ok, row))
+        states.sort(key=lambda s: s[0])
+        new: dict[int, tuple[float, tuple]] = {}
+        best, arg, j = -math.inf, None, 0
+        for t, sc in cand:
+            while j < len(states) and states[j][0] < t:
+                if states[j][1] > best:
+                    best, arg = states[j][1], states[j]
+                j += 1
+            if arg is not None and best + sc > new.get(t, (-math.inf,))[0]:
+                new[t] = (best + sc, (arg[2], i, t))
+        for t, sc, node in states:
+            if sc + drop > new.get(t, (-math.inf,))[0]:
+                new[t] = (sc + drop, (node, i, None))
+        states = sorted(((t, v[0], v[1]) for t, v in new.items()), key=lambda s: -s[1])[:keep_states]
+    node = max(states, key=lambda s: s[1])[2]
+    out: list[int | None] = [None] * len(beats)
+    while node is not None:
+        parent, i, t = node
+        out[i] = t
+        node = parent
+    return out
+
+
+def quantize_line_learned(notes: list[Note], grid: BeatGrid, simple: bool = False,
+                          model=None) -> list[QNote]:
+    """quantize_line with the places, rests and left-out notes read by the learned model
+    (load_learned); falls back to quantize_line without it. A note ends where the next
+    one starts, less the rest the model reads after it; after a "long" rest (and the
+    last note) it ends as in quantize_line: its end snapped to 8ths (16ths or triplets
+    where it starts on one)."""
+    import numpy as np
+    if not notes:
+        return []
+    unit = grid.beat_ticks
+    model = model or load_learned()
+    if model is None or unit not in ALLOWED:
+        return quantize_line(notes, grid, simple)
+    net, cfg = model
+    min_dur = EIGHTH if simple else SIXTEENTH
+    merged, grace = _merged(notes, grid)
+    rule = rule_reading(merged, grace, grid)
+    lp, lr, lx, lk = learned_outputs(net, learned_features(merged, grace, grid, rule), cfg.get("zeroed", ()))
+    beats = [math.floor(s / unit) for s, _, _ in merged]
+    lp = lean_to_rules(lp, rule, beats, unit, cfg.get("rule_bonus", 0.0))
+    ticks = decode_places(lp, lx, lk, beats, unit, simple, cfg.get("extra_weight", 1.0))
+    rmask = rest_mask(unit, simple)
+    kept = [(t, i) for i, t in enumerate(ticks) if t is not None]
+    out = []
+    for k, (st, i) in enumerate(kept):
+        e, n = merged[i][1], merged[i][2]
+        nxt = kept[k + 1][0] if k + 1 < len(kept) else None
+        r = int(np.argmax(np.where(rmask, lr[i], -np.inf)))
+        if nxt is not None and r != LONG_REST:
+            en = nxt - RESTS[r] * unit // 12
+            if en - st < min_dur:
+                en = nxt
+        else:
+            step = EIGHTH
+            if not simple and st % SIXTEENTH and st % TRIPLET == 0:
+                step = TRIPLET
+            elif not simple and (st % EIGHTH or unit == EIGHTH_BEAT):
+                step = SIXTEENTH
+            en = max(snap(e, step), st + min_dur)
+            if nxt is not None and (nxt - en < min_dur or en > nxt):
+                en = nxt
+        out.append(QNote(n.pitch, st, en - st, n.velocity))
     return out

@@ -306,10 +306,14 @@ def _coverage(notes: list[Note]) -> float:
 
 def _as_melody(name: str, notes: list[Note], grid: BeatGrid | None = None,
                struck: list[Note] = ()) -> list[Note]:
-    from .melody import join_split_notes, top_voice, piano_melody
+    from .melody import VoicedLine, join_split_notes, top_voice, piano_melody, use_learned_picker
     if name == "vocals":
         # already one clean line; merging touching same-pitch notes would undo re-sung notes
         return sorted(notes, key=lambda n: n.start)
+    if name == "piano" and use_learned_picker():
+        # a recording with the trained tune picker on (SHEETSWAP_TUNE_PICKER): the bar
+        # lines still come from the voiced notes; arrange's fill_tune swaps in its tune
+        return VoicedLine(piano_melody(notes))
     if name in ("piano", "midi_all"):
         return piano_melody(notes)
     line = top_voice(notes)
@@ -459,7 +463,7 @@ def _arrange_score(an: Analysis, opts: ArrangeOptions) -> Arrangement:
 def arrange(an: Analysis, opts: ArrangeOptions) -> Arrangement:
     if an.kind == "score":
         return _arrange_score(an, opts)
-    from .rhythm import quantize_line, add_breath_marks
+    from .rhythm import quantize_tune, add_breath_marks
     from .flute import fit_to_flute, easy_key_shift, key_after_shift
     from .harmony import detect_key
     from .piano import accompany
@@ -474,7 +478,8 @@ def arrange(an: Analysis, opts: ArrangeOptions) -> Arrangement:
         from .melody import fill_tune
         melody = fill_tune(melody, an.sources[used])
         pool, bass = _accompaniment_pool(an, used, melody)
-    line = quantize_line(melody, grid, simple=opts.simple)
+    # the rules, or the learned reader (SHEETSWAP_RHYTHM, rhythm.rhythm_reader) for recordings
+    line = quantize_tune(melody, grid, simple=opts.simple, recording=an.kind != "midi", source=used)
 
     everything = [n for notes in an.sources.values() for n in notes]
     weights = [(n.pitch, max(n.end - n.start, 0.01)) for n in everything] or [(60, 1.0)]

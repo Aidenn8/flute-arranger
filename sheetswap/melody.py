@@ -5,15 +5,23 @@ stem) and keeps one line: high, loud, fresh notes joined by small steps.
 piano_melody takes the tune a pianist voices (plays louder); fill_tune adds the
 softer tune notes between those (passing notes, runs), choosing the path that
 moves most like a melody. clean_monophonic tidies a line that is already one
-voice (the vocal stem).
+voice (the vocal stem). learned_tune is the trained alternative to piano_melody +
+fill_tune for piano recordings (opt-in: SHEETSWAP_TUNE_PICKER=learned).
 """
 from __future__ import annotations
 
+import json
+import logging
+import os
+import pickle
 from bisect import bisect_right
 
 import numpy as np
 
+from .config import MODELS_DIR
 from .model import Note
+
+log = logging.getLogger(__name__)
 
 # top_voice
 MIN_DUR = 0.05        # s, shorter notes are transcription noise
@@ -128,13 +136,13 @@ def top_voice(notes: list[Note]) -> list[Note]:
     return line
 
 
-def _unisons_merged(notes):
-    """Copies of the notes of at least MIN_DUR, sorted by onset (high first);
+def _unisons_merged(notes, min_dur: float = MIN_DUR):
+    """Copies of the notes of at least min_dur, sorted by onset (high first);
     same-pitch notes struck within SAME_ONSET become one (one key, one note)."""
     out: list[Note] = []
     last: dict[int, Note] = {}
     for n in sorted(notes, key=lambda n: (n.start, -n.pitch)):
-        if n.end - n.start < MIN_DUR:
+        if n.end - n.start < min_dur:
             continue
         m = last.get(n.pitch)
         if m is not None and n.start - m.start < SAME_ONSET:
@@ -526,7 +534,26 @@ def fill_tune(line: list[Note], notes: list[Note]) -> list[Note]:
     of the tune, not the accompaniment under a repeated note. Lines from
     top_voice (no voicing) are returned as they are. Returns new Note
     objects, each cut at the next.
+
+    With the learned picker on, a piano recording's line comes as a
+    VoicedLine (its bar lines were placed on it): if the pianist voiced a
+    tune, the learned picker's tune (learned_tune) is returned instead. It
+    was trained on human performances and is unsure of the top voice in
+    evenly played chords (a Bach chorale from a sequencer: melody F1 0.45
+    against top_voice's 0.90 on bench set A), so evenly played music keeps
+    top_voice's line, as here without the model. A LearnedLine is returned
+    as it is.
     """
+    if isinstance(line, LearnedLine):
+        return LearnedLine(Note(n.pitch, n.start, n.end, n.velocity) for n in line)
+    if isinstance(line, VoicedLine):
+        model = tune_model()
+        if model is not None and projected_line(notes) is not None:
+            return learned_tune(notes, model)
+    return _fill_tune_rules(line, notes)
+
+
+def _fill_tune_rules(line: list[Note], notes: list[Note]) -> list[Note]:
     if not line or projected_line(notes) is None:
         return [Note(n.pitch, n.start, n.end, n.velocity) for n in line]
     ns = sorted(notes, key=lambda n: (n.start, -n.pitch))
@@ -698,3 +725,307 @@ def _merge_same_pitch(line: list[Note]) -> list[Note]:
         else:
             out.append(n)
     return out
+
+
+# ---------------------------------------------------------------- learned tune picker
+#
+# piano_melody + fill_tune decide note by note, with hand-set rules and log-odds,
+# whether a transcribed piano note is the tune. learned_tune asks a model instead,
+# trained on pop and classical piano pieces played through our own transcriber
+# (bench/train_tune_picker.py; data and licenses in bench/TRAINING.md). Every note
+# gets the features below, the model gives the chance it is a tune note, and the
+# likeliest line through those chances is kept (_likely_line). Used for piano
+# recordings when SHEETSWAP_TUNE_PICKER=learned (PICKER_DEFAULT otherwise), and
+# only if the model file is there: without it the rules are used. The pipeline
+# still finds the meter and bar lines on the voiced notes (VoicedLine); the
+# learned tune is what gets written on them (fill_tune).
+
+PICKER_ENV = "SHEETSWAP_TUNE_PICKER"   # "learned" or "rules"
+PICKER_DEFAULT = "rules"
+TUNE_MODEL_DIR = MODELS_DIR / "tune_picker"
+CONTEXT_S = 1.5       # s each side: the notes around a note
+NEAR_S = 0.5          # s each side: the notes right around it
+HELD_LOOKBACK = 8.0   # s: notes struck this long ago may still sound
+CAP_S = 4.0           # s: longer times count as this
+LINE_WINDOW = 64      # notes a line note may follow with an interval cost (earlier: free)
+
+FEATURES = [
+    "pitch", "log_dur", "vel",
+    "cluster_size", "above_in_cluster", "below_in_cluster", "louder_in_cluster",
+    "vel_under_cluster_max", "under_cluster_top", "is_top", "octave_over_louder", "twelfth_over_louder",
+    "held_above_count", "held_above_max", "free_s", "free_share",
+    "over_local_top", "under_near_max", "under_context_max", "over_context_median",
+    "context_position", "vel_over_context", "vel_over_context_q75", "vel_z", "vel_under_near_max",
+    "vel_over_tops", "over_tops_median", "notes_per_s", "onsets_per_s", "log_dur_over_context",
+    "to_prev_top", "to_next_top", "near_prev", "near_next", "ioi_prev", "ioi_next",
+    "since_same_key", "until_same_key", "pedal",
+    "piece_vel_iqr", "piece_vel_median", "piece_notes_per_s", "piece_voiced",
+    "rule_top_voice", "rule_projected", "rule_tune",
+]
+
+
+class LearnedLine(list):
+    """A tune line from learned_tune: fill_tune leaves it as it is."""
+
+
+class VoicedLine(list):
+    """A piano recording's voiced tune (piano_melody) while the learned picker
+    is on. The meter and bar lines are found on it, as with the rules (the
+    notes a pianist voiced fall on the strong beats); fill_tune then swaps in
+    the learned tune, where the rules would add the softer tune notes."""
+
+
+def tune_picker() -> str:
+    """"learned" or "rules": SHEETSWAP_TUNE_PICKER, else PICKER_DEFAULT."""
+    v = os.environ.get(PICKER_ENV, "").strip().lower()
+    return v if v in ("learned", "rules") else PICKER_DEFAULT
+
+
+_MODEL_CACHE: dict = {}
+
+
+def tune_model(model_dir=None) -> dict | None:
+    """The trained picker {clf, meta} from models/tune_picker/ (loaded once),
+    or None if it is missing, unreadable or made for other features."""
+    d = TUNE_MODEL_DIR if model_dir is None else model_dir
+    key = str(d)
+    if key not in _MODEL_CACHE:
+        _MODEL_CACHE[key] = None
+        try:
+            meta = json.loads((d / "meta.json").read_text())
+            if meta.get("features") != FEATURES:
+                log.warning("tune picker in %s was trained on other features; using the rules", d)
+            else:
+                with open(d / "model.pkl", "rb") as f:      # our own file, from bench/train_tune_picker.py
+                    clf = pickle.load(f)
+                _MODEL_CACHE[key] = dict(clf=clf, meta=meta)
+        except FileNotFoundError:
+            pass
+        except Exception as exc:                            # another sklearn's model, a broken file
+            log.warning("tune picker in %s could not be loaded (%s); using the rules", d, exc)
+    return _MODEL_CACHE[key]
+
+
+def use_learned_picker() -> bool:
+    return tune_picker() == "learned" and tune_model() is not None
+
+
+def _clusters(s: np.ndarray) -> np.ndarray:
+    """Cluster number of each note (sorted by onset): notes struck within
+    SAME_ONSET of a cluster's first note are one chord."""
+    cl = np.zeros(len(s), int)
+    first, c = 0, 0
+    for i in range(1, len(s)):
+        if s[i] - s[first] >= SAME_ONSET:
+            c += 1
+            first = i
+        cl[i] = c
+    return cl
+
+
+def _rule_marks(notes: list[Note], keys: list[tuple[int, float]]) -> np.ndarray:
+    """For each note key: in top_voice's line, in projected_line, in the rules'
+    final tune (fill_tune over piano_melody); and whether the piece looks voiced."""
+    def marks(line):
+        got = {(n.pitch, round(n.start, 3)) for n in line or []}
+        return np.array([k in got for k in keys], float)
+    proj = projected_line(notes)
+    tune = _fill_tune_rules(piano_melody(notes), notes)
+    return np.stack([marks(top_voice(notes)), marks(proj), marks(tune),
+                     np.full(len(keys), float(proj is not None))], axis=1)
+
+
+def tune_features(notes: list[Note]) -> tuple[list[Note], np.ndarray]:
+    """(notes, features): the notes (same-key unisons merged, sorted by onset,
+    high first) and one row of FEATURES per note."""
+    ns = _unisons_merged(notes, min_dur=0.0)
+    n = len(ns)
+    if n == 0:
+        return ns, np.zeros((0, len(FEATURES)), np.float32)
+    p = np.array([x.pitch for x in ns], float)
+    s = np.array([x.start for x in ns], float)
+    e = np.array([x.end for x in ns], float)
+    v = np.array([x.velocity for x in ns], float)
+    d = np.maximum(e - s, 1e-3)
+    F: dict[str, np.ndarray] = {"pitch": p, "log_dur": np.log(d), "vel": v}
+
+    # the chord each note is struck in
+    cl = _clusters(s)
+    nc = int(cl[-1]) + 1
+    cs = np.searchsorted(cl, np.arange(nc))
+    ce = np.r_[cs[1:], n]
+    above, below, louder = np.zeros(n), np.zeros(n), np.zeros(n)
+    vmax, ptop, oct8, oct19 = np.zeros(n), np.zeros(n), np.zeros(n), np.zeros(n)
+    top_idx = np.zeros(nc, int)
+    for k in range(nc):
+        a, b = cs[k], ce[k]
+        pp, vv = p[a:b], v[a:b]
+        dp = pp[:, None] - pp[None, :]
+        louder_j = vv[None, :] > vv[:, None]
+        above[a:b] = (dp < 0).sum(1)
+        below[a:b] = (dp > 0).sum(1)
+        louder[a:b] = louder_j.sum(1)
+        vmax[a:b] = vv.max()
+        ptop[a:b] = pp.max()
+        oct8[a:b] = (((dp == 12) | (dp == 24)) & louder_j).any(1)
+        oct19[a:b] = ((dp == 19) & louder_j).any(1)
+        top_idx[k] = a + int(np.argmax(pp))
+    F.update(cluster_size=(ce - cs)[cl].astype(float), above_in_cluster=above,
+             below_in_cluster=below, louder_in_cluster=louder, vel_under_cluster_max=vmax - v,
+             under_cluster_top=ptop - p, is_top=(above == 0).astype(float),
+             octave_over_louder=oct8, twelfth_over_louder=oct19)
+
+    # notes struck earlier that still sound over it; how long until a higher note comes
+    held_n, held_max = np.zeros(n), np.zeros(n)
+    lo_h = np.searchsorted(s, s - HELD_LOOKBACK)
+    hi_h = np.searchsorted(s, s - SAME_ONSET, side="right")
+    for i in range(n):
+        a, b = lo_h[i], hi_h[i]
+        if b > a:
+            up = (e[a:b] > s[i] + SAME_ONSET) & (p[a:b] > p[i])
+            if up.any():
+                held_n[i] = up.sum()
+                held_max[i] = (p[a:b][up] - p[i]).max()
+    free = np.minimum(_first_higher_onset(p, s, e) - s, CAP_S)
+    F.update(held_above_count=held_n, held_above_max=held_max, free_s=free,
+             free_share=np.minimum(free / d, 1.0))
+
+    # the notes around it
+    ref = _local_top(p, s, e)
+    lo, hi = np.searchsorted(s, s - CONTEXT_S), np.searchsorted(s, s + CONTEXT_S, side="right")
+    lo2, hi2 = np.searchsorted(s, s - NEAR_S), np.searchsorted(s, s + NEAR_S, side="right")
+    ts = s[top_idx]
+    tlo, thi = np.searchsorted(ts, s - CONTEXT_S), np.searchsorted(ts, s + CONTEXT_S, side="right")
+    olo, ohi = np.searchsorted(ts, s - 1.0), np.searchsorted(ts, s + 1.0, side="right")
+    ctx = np.zeros((n, 11))
+    logd = np.log(d)
+    for i in range(n):
+        a, b = lo[i], hi[i]
+        pw, vw = p[a:b], v[a:b]
+        tv, tp = v[top_idx[tlo[i]:thi[i]]], p[top_idx[tlo[i]:thi[i]]]
+        ctx[i] = (pw.max(), np.median(pw), pw.min(), np.median(vw), np.percentile(vw, 75), vw.std(),
+                  p[lo2[i]:hi2[i]].max(), v[lo2[i]:hi2[i]].max(), np.median(tv), np.median(tp),
+                  np.median(logd[a:b]))
+    F.update(over_local_top=p - ref, under_near_max=ctx[:, 6] - p, under_context_max=ctx[:, 0] - p,
+             over_context_median=p - ctx[:, 1],
+             context_position=(p - ctx[:, 2]) / (ctx[:, 0] - ctx[:, 2] + 1),
+             vel_over_context=v - ctx[:, 3], vel_over_context_q75=v - ctx[:, 4],
+             vel_z=(v - ctx[:, 3]) / (ctx[:, 5] + 5), vel_under_near_max=ctx[:, 7] - v,
+             vel_over_tops=v - ctx[:, 8], over_tops_median=p - ctx[:, 9],
+             notes_per_s=(hi - lo) / (2 * CONTEXT_S), onsets_per_s=(ohi - olo) / 2.0,
+             log_dur_over_context=logd - ctx[:, 10])
+
+    # the chords before and after it
+    prev_c, next_c = np.maximum(cl - 1, 0), np.minimum(cl + 1, nc - 1)
+    has_prev, has_next = cl > 0, cl < nc - 1
+    near_prev, near_next = np.zeros(n), np.zeros(n)
+    for i in range(n):
+        if has_prev[i]:
+            q = p[cs[prev_c[i]]:ce[prev_c[i]]] - p[i]
+            near_prev[i] = q[np.argmin(np.abs(q))]
+        if has_next[i]:
+            q = p[cs[next_c[i]]:ce[next_c[i]]] - p[i]
+            near_next[i] = q[np.argmin(np.abs(q))]
+    F.update(to_prev_top=np.where(has_prev, p - p[top_idx[prev_c]], 0.0),
+             to_next_top=np.where(has_next, p[top_idx[next_c]] - p, 0.0),
+             near_prev=np.where(has_prev, near_prev, 24.0),
+             near_next=np.where(has_next, near_next, 24.0),
+             ioi_prev=np.where(has_prev, np.minimum(s[cs[cl]] - s[cs[prev_c]], CAP_S), CAP_S),
+             ioi_next=np.where(has_next, np.minimum(s[cs[next_c]] - s[cs[cl]], CAP_S), CAP_S))
+
+    # the same key struck before and after
+    since, until = np.full(n, CAP_S), np.full(n, CAP_S)
+    last: dict[int, int] = {}
+    for i in range(n):
+        j = last.get(int(p[i]))
+        if j is not None:
+            since[i] = min(s[i] - s[j], CAP_S)
+            until[j] = min(s[i] - s[j], CAP_S)
+        last[int(p[i])] = i
+    F.update(since_same_key=since, until_same_key=until, pedal=_pedal_down(p, s, e).astype(float))
+
+    span = max(e.max() - s.min(), 1.0)
+    q75, q25 = np.percentile(v, [75, 25])
+    rules = _rule_marks(ns, [(x.pitch, round(x.start, 3)) for x in ns])
+    F.update(piece_vel_iqr=np.full(n, q75 - q25), piece_vel_median=np.full(n, np.median(v)),
+             piece_notes_per_s=np.full(n, n / span), piece_voiced=rules[:, 3],
+             rule_top_voice=rules[:, 0], rule_projected=rules[:, 1], rule_tune=rules[:, 2])
+    return ns, np.stack([F[k] for k in FEATURES], axis=1).astype(np.float32)
+
+
+def _likely_line(p: np.ndarray, s: np.ndarray, z: np.ndarray, step: float, leap: float,
+                 repeat: float = 0.0) -> list[int]:
+    """Indexes (notes sorted by onset) of the line with the largest total z
+    (log-odds of being the tune) minus step * |interval| (leap more for an
+    interval over an octave, repeat for the same key again) between
+    neighbours; notes struck within SAME_ONSET of each other are never both
+    in it. Beyond the last LINE_WINDOW notes a line may be joined at no
+    interval cost (after a rest)."""
+    n = len(p)
+    best = np.full(n, -np.inf)
+    pred = np.full(n, -1)
+    pmax, parg = np.full(n, -np.inf), np.full(n, -1)    # best over notes 0..i
+    for i in range(n):
+        hi = int(np.searchsorted(s, s[i] - SAME_ONSET, side="right"))
+        lo = max(0, hi - LINE_WINDOW)
+        val, arg = 0.0, -1
+        if hi > lo:
+            dp = np.abs(p[lo:hi] - p[i])
+            c = best[lo:hi] - step * dp - leap * (dp > 12) - repeat * (dp == 0)
+            k = int(np.argmax(c))
+            if c[k] > val:
+                val, arg = float(c[k]), lo + k
+        if lo > 0 and pmax[lo - 1] > val:
+            val, arg = float(pmax[lo - 1]), int(parg[lo - 1])
+        best[i], pred[i] = z[i] + val, arg
+        if i and pmax[i - 1] >= best[i]:
+            pmax[i], parg[i] = pmax[i - 1], parg[i - 1]
+        else:
+            pmax[i], parg[i] = best[i], i
+    path: list[int] = []
+    if n == 0:
+        return path
+    k = int(np.argmax(best))
+    if best[k] <= 0:
+        return path
+    while k >= 0:
+        path.append(k)
+        k = int(pred[k])
+    return path[::-1]
+
+
+def tune_probabilities(notes: list[Note], model: dict) -> tuple[list[Note], np.ndarray]:
+    """(notes as tune_features returns them, the model's chance each is the tune)."""
+    ns, X = tune_features(notes)
+    if not ns:
+        return ns, np.zeros(0)
+    return ns, model["clf"].predict_proba(X)[:, 1]
+
+
+def line_from_probabilities(ns: list[Note], prob: np.ndarray, cfg: dict) -> "LearnedLine":
+    """The likeliest line through notes ns given their tune chances; cfg holds
+    the line step's settings (bias on the log-odds, step and leap costs)."""
+    if not ns:
+        return LearnedLine()
+    q = np.clip(prob, 1e-4, 1 - 1e-4)
+    z = np.log(q / (1 - q)) - cfg.get("bias", 0.0)
+    p = np.array([x.pitch for x in ns], float)
+    s = np.array([x.start for x in ns], float)
+    path = _likely_line(p, s, z, cfg.get("step", 0.05), cfg.get("leap", 0.5), cfg.get("repeat", 0.0))
+    line = LearnedLine(Note(ns[i].pitch, ns[i].start, ns[i].end, ns[i].velocity) for i in path)
+    if cfg.get("hold_restruck", True):
+        _hold_restruck(line, ns)
+    for a, b in zip(line, line[1:]):
+        a.end = min(a.end, b.start)
+    return LearnedLine(x for x in line if x.end > x.start)
+
+
+def learned_tune(notes: list[Note], model: dict | None = None) -> list[Note]:
+    """The tune of a piano transcription, picked by the trained model (or by
+    the rules, piano_melody, if there is no model). Returns new Note objects,
+    each cut at the next, as a LearnedLine."""
+    model = model or tune_model()
+    if model is None:
+        return piano_melody(notes)
+    ns, prob = tune_probabilities(notes, model)
+    return line_from_probabilities(ns, prob, model["meta"].get("line", {}))
